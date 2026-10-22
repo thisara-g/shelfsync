@@ -1,0 +1,7 @@
+{
+  "_comment": "Copied to config/google_oauth.json by ./setup (that file is git-ignored). The Android app needs no client id here: Google matches its package name + signing SHA-1 to the Android OAuth client in the same Cloud project.",
+  "desktop": {
+    "client_id": "YOUR_DESKTOP_CLIENT_ID.apps.googleusercontent.com",
+    "client_secret": "YOUR_DESKTOP_CLIENT_SECRET"
+  }
+}

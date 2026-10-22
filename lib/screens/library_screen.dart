@@ -6,12 +6,15 @@ import 'package:flutter/material.dart';
 import '../models/book.dart';
 import '../services/cover_renderer.dart';
 import '../services/library_store.dart';
+import '../sync/sync_controller.dart';
 import 'reader_screen.dart';
+import 'sync_button.dart';
 
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({super.key, required this.store});
+  const LibraryScreen({super.key, required this.store, required this.sync});
 
   final LibraryStore store;
+  final SyncController sync;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -101,7 +104,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
           final books = store.books;
           return CustomScrollView(
             slivers: [
-              const SliverAppBar.medium(title: Text('Library')),
+              SliverAppBar.medium(
+                title: const Text('Library'),
+                actions: [SyncButton(sync: widget.sync)],
+              ),
               if (books.isEmpty)
                 const SliverFillRemaining(hasScrollBody: false, child: _EmptyLibrary())
               else

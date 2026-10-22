@@ -41,6 +41,11 @@ dependencies:
   path: ^1.9.1
   pdfium_dart: ^0.4.0
   ffi: ^2.2.0
+  google_sign_in: ^7.2.0
+  googleapis: ^17.0.0
+  googleapis_auth: ^2.3.5
+  url_launcher: ^6.3.3
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:
@@ -63,6 +68,11 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  # config/google_oauth.json (created by ./setup, git-ignored) is bundled when
+  # present; without it the app runs with sync disabled.
+  assets:
+    - config/
 
   # To add assets to your application, add an assets section, like this:
   # assets:
