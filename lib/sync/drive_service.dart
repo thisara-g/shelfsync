@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
 
@@ -7,6 +11,29 @@ class DriveAccount {
   final String email;
   final String displayName;
 }
+
+/// A book PDF stored in the ShelfSync Drive folder.
+class RemoteBook {
+  const RemoteBook({
+    required this.fileId,
+    required this.bookId,
+    required this.title,
+    required this.createdTime,
+    this.sizeBytes,
+    this.thumbnailLink,
+  });
+
+  final String fileId;
+
+  /// SHA-256 of the content, from the file's appProperties.
+  final String bookId;
+  final String title;
+  final DateTime createdTime;
+  final int? sizeBytes;
+  final String? thumbnailLink;
+}
+
+typedef ProgressCallback = void Function(double fraction);
 
 /// Thin wrapper over the Drive v3 API for ShelfSync's needs.
 ///
@@ -50,6 +77,117 @@ class DriveService {
       $fields: 'id',
     );
     return created.id!;
+  }
+
+  /// All ShelfSync books in [folderId], oldest first.
+  Future<List<RemoteBook>> listBooks(String folderId) async {
+    final books = <RemoteBook>[];
+    String? pageToken;
+    do {
+      final page = await api.files.list(
+        q: "'$folderId' in parents and trashed = false and appProperties has { key='shelfsync' and value='book' }",
+        orderBy: 'createdTime',
+        pageSize: 1000,
+        pageToken: pageToken,
+        spaces: 'drive',
+        $fields: 'nextPageToken, files(id, name, size, createdTime, appProperties, thumbnailLink)',
+      );
+      for (final f in page.files ?? const <drive.File>[]) {
+        final bookId = f.appProperties?['shelfsync_id'];
+        if (f.id == null || bookId == null) continue;
+        final name = f.name ?? 'Untitled.pdf';
+        books.add(RemoteBook(
+          fileId: f.id!,
+          bookId: bookId,
+          title: name.toLowerCase().endsWith('.pdf') ? name.substring(0, name.length - 4) : name,
+          createdTime: f.createdTime ?? DateTime.now(),
+          sizeBytes: int.tryParse(f.size ?? ''),
+          thumbnailLink: f.thumbnailLink,
+        ));
+      }
+      pageToken = page.nextPageToken;
+    } while (pageToken != null);
+    return books;
+  }
+
+  /// Uploads [file] into [folderId] (resumable, so large PDFs survive hiccups).
+  /// Returns the new Drive file id.
+  Future<String> uploadBook({
+    required String folderId,
+    required File file,
+    required String bookId,
+    required String title,
+    ProgressCallback? onProgress,
+  }) async {
+    final length = await file.length();
+    var sent = 0;
+    final stream = file.openRead().map((chunk) {
+      sent += chunk.length;
+      onProgress?.call(length == 0 ? 1 : sent / length);
+      return chunk;
+    });
+    final created = await api.files.create(
+      drive.File(
+        name: '$title.pdf',
+        parents: [folderId],
+        mimeType: 'application/pdf',
+        appProperties: {'shelfsync': 'book', 'shelfsync_id': bookId},
+      ),
+      uploadMedia: drive.Media(stream, length, contentType: 'application/pdf'),
+      uploadOptions: drive.UploadOptions.resumable,
+      $fields: 'id',
+    );
+    return created.id!;
+  }
+
+  /// Streams the file's content into [target].
+  Future<void> downloadBook({
+    required String fileId,
+    required File target,
+    int? expectedBytes,
+    ProgressCallback? onProgress,
+  }) async {
+    final media = await api.files.get(fileId, downloadOptions: drive.DownloadOptions.fullMedia) as drive.Media;
+    final total = media.length ?? expectedBytes;
+    var received = 0;
+    final sink = target.openWrite();
+    try {
+      await for (final chunk in media.stream) {
+        sink.add(chunk);
+        received += chunk.length;
+        if (total != null && total > 0) onProgress?.call(received / total);
+      }
+    } finally {
+      await sink.close();
+    }
+  }
+
+  /// True if the file was deleted or trashed (as opposed to merely missing
+  /// from a possibly stale listing).
+  Future<bool> isGone(String fileId) async {
+    try {
+      final f = await api.files.get(fileId, $fields: 'trashed') as drive.File;
+      return f.trashed ?? false;
+    } on drive.DetailedApiRequestError catch (e) {
+      if (e.status == 404) return true;
+      rethrow;
+    }
+  }
+
+  /// Moves the file to the Drive trash (recoverable for 30 days).
+  Future<void> trash(String fileId) => api.files.update(drive.File(trashed: true), fileId);
+
+  /// Drive's own first-page thumbnail for a PDF, if it has generated one.
+  Future<Uint8List?> thumbnail(String link) async {
+    try {
+      // Ask for a larger rendition than the default 220px.
+      final sized = link.replaceFirst(RegExp(r'=s\d+$'), '=s400');
+      final response = await client.get(Uri.parse(sized));
+      final type = response.headers['content-type'] ?? '';
+      return response.statusCode == 200 && type.startsWith('image/') ? response.bodyBytes : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   static Uri folderUrl(String folderId) => Uri.parse('https://drive.google.com/drive/folders/$folderId');

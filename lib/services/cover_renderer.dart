@@ -24,13 +24,20 @@ class CoverRenderer {
 
   /// Returns the cover file, rendering it first if needed. Null if the PDF
   /// can't be rendered.
-  Future<File?> coverFor(Book book) => _covers.putIfAbsent(book.id, () {
-        final file = store.coverFor(book);
-        if (file.existsSync()) return Future.value(file);
-        final result = _queue.then((_) => _render(book, file));
-        _queue = result.then((_) {}, onError: (_) {});
-        return result;
-      });
+  Future<File?> coverFor(Book book) {
+    final cached = _covers[book.id];
+    if (cached != null) return cached;
+    final file = store.coverFor(book);
+    // A cloud-only book can't be rendered yet; don't cache the miss, so its
+    // Drive thumbnail (or a render after download) shows up when it arrives.
+    if (!file.existsSync() && !book.isLocal) return Future.value(null);
+    return _covers.putIfAbsent(book.id, () {
+      if (file.existsSync()) return Future.value(file);
+      final result = _queue.then((_) => _render(book, file));
+      _queue = result.then((_) {}, onError: (_) {});
+      return result;
+    });
+  }
 
   Future<File?> _render(Book book, File out) async {
     await pdfrxFlutterInitialize();
@@ -59,7 +66,11 @@ class CoverRenderer {
       await tmp.rename(out.path);
 
       if (book.pageCount == null) {
-        await store.updateProgress(book.id, page: book.lastPage, pageCount: document.pages.length);
+        await store.updateProgress(
+          book.id,
+          page: book.lastPage,
+          pageCount: document.pages.length,
+        );
       }
       return out;
     } catch (_) {

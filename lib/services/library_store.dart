@@ -20,6 +20,7 @@ class LibraryStore extends ChangeNotifier {
   final Directory rootDir;
   final Map<String, Book> _books = {};
   bool _darkReader = false;
+  String? _syncAccount;
 
   /// Whether the reader shows pages in dark mode (applies to all books).
   bool get darkReader => _darkReader;
@@ -52,9 +53,12 @@ class LibraryStore extends ChangeNotifier {
       final json = jsonDecode(await _indexFile.readAsString()) as Map<String, dynamic>;
       final settings = json['settings'] as Map<String, dynamic>? ?? const {};
       _darkReader = settings['darkReader'] as bool? ?? false;
+      _syncAccount = settings['syncAccount'] as String?;
       for (final entry in json['books'] as List<dynamic>) {
         final book = Book.fromJson(entry as Map<String, dynamic>);
-        if (await fileFor(book).exists()) _books[book.id] = book;
+        book.isLocal = await fileFor(book).exists();
+        // Keep cloud-only entries; drop local ones whose file has vanished.
+        if (book.isLocal || book.driveFileId != null) _books[book.id] = book;
       }
     }
     notifyListeners();
@@ -64,7 +68,7 @@ class LibraryStore extends ChangeNotifier {
     final tmp = File('${_indexFile.path}.tmp');
     final json = {
       'version': 1,
-      'settings': {'darkReader': _darkReader},
+      'settings': {'darkReader': _darkReader, 'syncAccount': _syncAccount},
       'books': _books.values.map((b) => b.toJson()).toList(),
     };
     await tmp.writeAsString(const JsonEncoder.withIndent('  ').convert(json), flush: true);
@@ -72,22 +76,109 @@ class LibraryStore extends ChangeNotifier {
   }
 
   /// Copies the file at [path] into the library, keyed by its content hash.
+  ///
+  /// Importing a file that's already in the library only as a cloud entry
+  /// counts as downloading it.
   Future<ImportResult> importFile(String path) async {
     final id = await hashFile(path);
-    if (_books.containsKey(id)) return ImportResult.duplicate;
+    final existing = _books[id];
+    if (existing != null && existing.isLocal) return ImportResult.duplicate;
 
     final fileName = p.basename(path);
-    final book = Book(
-      id: id,
-      title: p.basenameWithoutExtension(fileName),
-      fileName: fileName,
-      addedAt: DateTime.now(),
-    );
+    final book = existing ??
+        Book(
+          id: id,
+          title: p.basenameWithoutExtension(fileName),
+          fileName: fileName,
+          addedAt: DateTime.now(),
+        );
     await File(path).copy(fileFor(book).path);
+    book
+      ..isLocal = true
+      ..sizeBytes = await File(path).length();
     _books[id] = book;
     await _save();
     notifyListeners();
     return ImportResult.added;
+  }
+
+  /// Adds a book that exists in Drive but not on this device.
+  Future<void> addRemote({
+    required String id,
+    required String title,
+    required String driveFileId,
+    required DateTime addedAt,
+    int? sizeBytes,
+  }) async {
+    if (_books.containsKey(id)) return;
+    _books[id] = Book(
+      id: id,
+      title: title,
+      fileName: '$title.pdf',
+      addedAt: addedAt,
+      driveFileId: driveFileId,
+      sizeBytes: sizeBytes,
+      isLocal: false,
+    );
+    await _save();
+    notifyListeners();
+  }
+
+  Future<void> setDriveFileId(String id, String? driveFileId) async {
+    final book = _books[id];
+    if (book == null || book.driveFileId == driveFileId) return;
+    book.driveFileId = driveFileId;
+    await _save();
+    notifyListeners();
+  }
+
+  /// Moves a fully downloaded and verified temp file into place.
+  Future<void> adoptDownload(String id, File downloaded) async {
+    final book = _books[id];
+    if (book == null) return;
+    await downloaded.rename(fileFor(book).path);
+    book.isLocal = true;
+    await _save();
+    notifyListeners();
+  }
+
+  /// Deletes the downloaded PDF but keeps the book (and its progress) as a
+  /// cloud entry. Only valid for books that are in Drive.
+  Future<void> removeLocalCopy(String id) async {
+    final book = _books[id];
+    if (book == null || book.driveFileId == null) return;
+    final file = fileFor(book);
+    if (await file.exists()) await file.delete();
+    book.isLocal = false;
+    await _save();
+    notifyListeners();
+  }
+
+  Future<void> saveCover(Book book, List<int> png) async {
+    final file = coverFor(book);
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(png, flush: true);
+    notifyListeners();
+  }
+
+  /// Where in-progress downloads are written before verification.
+  File downloadTempFor(Book book) => File('${fileFor(book).path}.part');
+
+  /// Records which Google account the books' Drive ids belong to. When a
+  /// different account signs in, those ids are meaningless: downloaded books
+  /// are unlinked (and will upload to the new account) and cloud-only entries
+  /// are dropped. Nothing on disk is deleted.
+  Future<void> bindSyncAccount(String email) async {
+    if (_syncAccount == email) return;
+    if (_syncAccount != null) {
+      _books.removeWhere((_, book) => !book.isLocal);
+      for (final book in _books.values) {
+        book.driveFileId = null;
+      }
+    }
+    _syncAccount = email;
+    await _save();
+    notifyListeners();
   }
 
   Future<void> setDarkReader(bool value) async {

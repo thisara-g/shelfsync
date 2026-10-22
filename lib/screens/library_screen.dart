@@ -6,15 +6,17 @@ import 'package:flutter/material.dart';
 import '../models/book.dart';
 import '../services/cover_renderer.dart';
 import '../services/library_store.dart';
+import '../sync/library_sync.dart';
 import '../sync/sync_controller.dart';
 import 'reader_screen.dart';
 import 'sync_button.dart';
 
 class LibraryScreen extends StatefulWidget {
-  const LibraryScreen({super.key, required this.store, required this.sync});
+  const LibraryScreen({super.key, required this.store, required this.sync, required this.librarySync});
 
   final LibraryStore store;
   final SyncController sync;
+  final LibrarySync librarySync;
 
   @override
   State<LibraryScreen> createState() => _LibraryScreenState();
@@ -24,6 +26,12 @@ class _LibraryScreenState extends State<LibraryScreen> {
   late final _covers = CoverRenderer(widget.store);
 
   LibraryStore get store => widget.store;
+  LibrarySync get librarySync => widget.librarySync;
+
+  void _snack(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
 
   Future<void> _addBooks() async {
     final files = await FilePicker.pickFiles(
@@ -42,50 +50,92 @@ class _LibraryScreenState extends State<LibraryScreen> {
         duplicates++;
       }
     }
-    if (!mounted || files.isEmpty) return;
+    if (files.isEmpty) return;
     final parts = [
       if (added > 0) 'Added $added book${added == 1 ? '' : 's'}',
       if (duplicates > 0) '$duplicates already in library',
     ];
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(parts.join(' · '))));
+    _snack(parts.join(' · '));
+    if (added > 0) librarySync.syncNow();
   }
 
   Future<void> _showBookMenu(Book book, Offset position) async {
+    final inCloud = book.driveFileId != null;
     final action = await showMenu<String>(
       context: context,
       position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy),
-      items: const [
-        PopupMenuItem(value: 'open', child: ListTile(leading: Icon(Icons.menu_book_outlined), title: Text('Open'))),
-        PopupMenuItem(value: 'remove', child: ListTile(leading: Icon(Icons.delete_outline), title: Text('Remove'))),
+      items: [
+        PopupMenuItem(
+          value: 'open',
+          child: ListTile(
+            leading: Icon(book.isLocal ? Icons.menu_book_outlined : Icons.cloud_download_outlined),
+            title: Text(book.isLocal ? 'Open' : 'Download and open'),
+          ),
+        ),
+        if (inCloud && book.isLocal)
+          const PopupMenuItem(
+            value: 'remove-local',
+            child: ListTile(leading: Icon(Icons.file_download_off_outlined), title: Text('Remove download')),
+          ),
+        PopupMenuItem(
+          value: 'delete',
+          child: ListTile(
+            leading: const Icon(Icons.delete_outline),
+            title: Text(inCloud ? 'Delete everywhere' : 'Remove'),
+          ),
+        ),
       ],
     );
     if (!mounted) return;
     switch (action) {
       case 'open':
-        _open(book);
-      case 'remove':
-        await _confirmRemove(book);
+        await _open(book);
+      case 'remove-local':
+        await store.removeLocalCopy(book.id);
+        _snack('Download removed. "${book.title}" stays in Google Drive.');
+      case 'delete':
+        await _confirmDelete(book);
     }
   }
 
-  Future<void> _confirmRemove(Book book) async {
-    final remove = await showDialog<bool>(
+  Future<void> _confirmDelete(Book book) async {
+    final inCloud = book.driveFileId != null;
+    final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Remove book?'),
-        content: Text('"${book.title}" will be removed from this device.'),
+        title: Text(inCloud ? 'Delete everywhere?' : 'Remove book?'),
+        content: Text(inCloud
+            ? '"${book.title}" will be moved to the trash in your Google Drive and removed from all your devices.'
+            : '"${book.title}" will be removed from this device.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Remove')),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(inCloud ? 'Delete' : 'Remove'),
+          ),
         ],
       ),
     );
-    if (remove == true) await store.remove(book.id);
+    if (confirmed != true) return;
+    try {
+      await librarySync.deleteEverywhere(book);
+    } catch (e) {
+      _snack(e is StateError ? e.message : "Couldn't delete: $e");
+    }
   }
 
-  void _open(Book book) {
+  Future<void> _open(Book book) async {
+    if (!book.isLocal) {
+      try {
+        await librarySync.download(book);
+      } catch (e) {
+        _snack(e is StateError ? e.message : 'Download failed: $e');
+        return;
+      }
+      if (!book.isLocal || !mounted) return;
+    }
     store.markOpened(book.id);
-    Navigator.of(context).push(
+    await Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => ReaderScreen(store: store, book: book)),
     );
   }
@@ -99,40 +149,46 @@ class _LibraryScreenState extends State<LibraryScreen> {
         label: const Text('Add PDF'),
       ),
       body: ListenableBuilder(
-        listenable: store,
+        listenable: Listenable.merge([store, librarySync]),
         builder: (context, _) {
           final books = store.books;
-          return CustomScrollView(
-            slivers: [
-              SliverAppBar.medium(
-                title: const Text('Library'),
-                actions: [SyncButton(sync: widget.sync)],
-              ),
-              if (books.isEmpty)
-                const SliverFillRemaining(hasScrollBody: false, child: _EmptyLibrary())
-              else
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(20, 8, 20, 112),
-                  sliver: SliverGrid.builder(
-                    gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
-                      maxCrossAxisExtent: 190,
-                      mainAxisSpacing: 28,
-                      crossAxisSpacing: 20,
-                      childAspectRatio: 0.56,
-                    ),
-                    itemCount: books.length,
-                    itemBuilder: (context, i) {
-                      final book = books[i];
-                      return _BookCard(
-                        book: book,
-                        cover: _covers.coverFor(book),
-                        onTap: () => _open(book),
-                        onMenu: (position) => _showBookMenu(book, position),
-                      );
-                    },
-                  ),
+          return RefreshIndicator(
+            onRefresh: librarySync.syncNow,
+            notificationPredicate: (n) => n.depth == 0 && widget.sync.status == SyncStatus.connected,
+            child: CustomScrollView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                SliverAppBar.medium(
+                  title: const Text('Library'),
+                  actions: [SyncButton(sync: widget.sync, librarySync: librarySync)],
                 ),
-            ],
+                if (books.isEmpty)
+                  const SliverFillRemaining(hasScrollBody: false, child: _EmptyLibrary())
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(20, 8, 20, 112),
+                    sliver: SliverGrid.builder(
+                      gridDelegate: const SliverGridDelegateWithMaxCrossAxisExtent(
+                        maxCrossAxisExtent: 190,
+                        mainAxisSpacing: 28,
+                        crossAxisSpacing: 20,
+                        childAspectRatio: 0.56,
+                      ),
+                      itemCount: books.length,
+                      itemBuilder: (context, i) {
+                        final book = books[i];
+                        return _BookCard(
+                          book: book,
+                          cover: _covers.coverFor(book),
+                          transfer: librarySync.transferFor(book.id),
+                          onTap: () => _open(book),
+                          onMenu: (position) => _showBookMenu(book, position),
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
           );
         },
       ),
@@ -165,16 +221,39 @@ class _EmptyLibrary extends StatelessWidget {
   }
 }
 
+String _formatSize(int bytes) {
+  if (bytes >= 1 << 30) return '${(bytes / (1 << 30)).toStringAsFixed(1)} GB';
+  if (bytes >= 1 << 20) return '${(bytes / (1 << 20)).toStringAsFixed(1)} MB';
+  return '${(bytes / 1024).ceil()} KB';
+}
+
 class _BookCard extends StatelessWidget {
-  const _BookCard({required this.book, required this.cover, required this.onTap, required this.onMenu});
+  const _BookCard({
+    required this.book,
+    required this.cover,
+    required this.transfer,
+    required this.onTap,
+    required this.onMenu,
+  });
 
   final Book book;
   final Future<File?> cover;
+  final Transfer? transfer;
   final VoidCallback onTap;
   final ValueChanged<Offset> onMenu;
 
   String get _status {
+    final t = transfer;
+    if (t != null) {
+      final verb = t.kind == TransferKind.upload ? 'Uploading' : 'Downloading';
+      final p = t.progress;
+      return p == null ? '$verb…' : '$verb ${(p * 100).round()}%';
+    }
     final count = book.pageCount;
+    if (!book.isLocal) {
+      final size = book.sizeBytes;
+      return size == null ? 'In Google Drive' : 'In Google Drive · ${_formatSize(size)}';
+    }
     if (book.lastOpenedAt == null) return count == null ? 'New' : 'New · $count pages';
     if (count == null) return 'Page ${book.lastPage}';
     if (book.lastPage >= count) return 'Finished';
@@ -185,6 +264,7 @@ class _BookCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final started = book.lastOpenedAt != null && book.pageCount != null;
+    final t = transfer;
     return GestureDetector(
       onLongPressStart: (d) => onMenu(d.globalPosition),
       onSecondaryTapUp: (d) => onMenu(d.globalPosition),
@@ -203,7 +283,27 @@ class _BookCard extends StatelessWidget {
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    _CoverImage(book: book, cover: cover),
+                    Opacity(
+                      opacity: book.isLocal ? 1 : 0.55,
+                      child: _CoverImage(book: book, cover: cover),
+                    ),
+                    if (!book.isLocal && t == null)
+                      const Align(alignment: Alignment.topRight, child: _CloudBadge()),
+                    if (t != null)
+                      ColoredBox(
+                        color: Colors.black38,
+                        child: Center(
+                          child: SizedBox.square(
+                            dimension: 44,
+                            child: CircularProgressIndicator(
+                              value: t.progress,
+                              strokeWidth: 4,
+                              color: Colors.white,
+                              backgroundColor: Colors.white24,
+                            ),
+                          ),
+                        ),
+                      ),
                     if (started)
                       Align(
                         alignment: Alignment.bottomCenter,
@@ -232,6 +332,29 @@ class _BookCard extends StatelessWidget {
               style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CloudBadge extends StatelessWidget {
+  const _CloudBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.all(8),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: scheme.surface.withValues(alpha: 0.9),
+          shape: BoxShape.circle,
+          boxShadow: const [BoxShadow(color: Colors.black26, blurRadius: 4)],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(6),
+          child: Icon(Icons.cloud_download_outlined, size: 18, color: scheme.primary),
         ),
       ),
     );

@@ -14,6 +14,9 @@ class Book {
     this.pageOffsetY,
     this.zoom,
     this.lastOpenedAt,
+    this.driveFileId,
+    this.sizeBytes,
+    this.isLocal = true,
   });
 
   final String id;
@@ -35,6 +38,14 @@ class Book {
   double? zoom;
   DateTime? lastOpenedAt;
 
+  /// Id of the PDF in the user's ShelfSync Drive folder, once uploaded.
+  String? driveFileId;
+  int? sizeBytes;
+
+  /// Whether the PDF is downloaded on this device. Not persisted: derived from
+  /// the file's presence when the library loads.
+  bool isLocal;
+
   double get progress {
     final count = pageCount;
     if (count == null || count <= 1) return 0;
@@ -51,6 +62,8 @@ class Book {
         pageOffsetX: (json['pageOffsetX'] as num?)?.toDouble(),
         pageOffsetY: (json['pageOffsetY'] as num?)?.toDouble(),
         zoom: (json['zoom'] as num?)?.toDouble(),
+        driveFileId: json['driveFileId'] as String?,
+        sizeBytes: json['sizeBytes'] as int?,
         lastOpenedAt: json['lastOpenedAt'] == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch(json['lastOpenedAt'] as int),
@@ -66,6 +79,8 @@ class Book {
         'pageOffsetX': pageOffsetX,
         'pageOffsetY': pageOffsetY,
         'zoom': zoom,
+        'driveFileId': driveFileId,
+        'sizeBytes': sizeBytes,
         'lastOpenedAt': lastOpenedAt?.millisecondsSinceEpoch,
       };
 }

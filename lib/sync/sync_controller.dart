@@ -8,9 +8,14 @@ enum SyncStatus { notConfigured, signedOut, connecting, connected, error }
 
 /// Owns the Google sign-in state and the Drive connection.
 class SyncController extends ChangeNotifier {
-  SyncController(this.auth) : _status = auth.isConfigured ? SyncStatus.signedOut : SyncStatus.notConfigured;
+  SyncController(this.auth, {this.driveFactory = DriveService.new})
+      : _status = auth.isConfigured ? SyncStatus.signedOut : SyncStatus.notConfigured;
 
   final GoogleAuth auth;
+
+  /// How a Drive client is built from an authenticated HTTP client (tests
+  /// substitute a fake).
+  final DriveService Function(http.Client client) driveFactory;
 
   SyncStatus _status;
   SyncStatus get status => _status;
@@ -62,7 +67,7 @@ class SyncController extends ChangeNotifier {
 
   Future<void> _connect(http.Client client) async {
     try {
-      final drive = DriveService(client);
+      final drive = driveFactory(client);
       _account = await drive.account();
       _folderId = await drive.ensureLibraryFolder();
       _drive = drive;
