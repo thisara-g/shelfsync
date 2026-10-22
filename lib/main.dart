@@ -47,8 +47,8 @@ class ShelfSyncApp extends StatelessWidget {
   }
 }
 
-/// Syncs whenever the app comes back to the foreground, so a book added on the
-/// other device shows up without a manual refresh.
+/// Syncs whenever the app comes back to the foreground, so a book or reading
+/// position from the other device shows up without a manual refresh.
 class _SyncOnResume extends StatefulWidget {
   const _SyncOnResume({required this.librarySync, required this.child});
 
@@ -65,7 +65,11 @@ class _SyncOnResumeState extends State<_SyncOnResume> {
   @override
   void initState() {
     super.initState();
-    _listener = AppLifecycleListener(onResume: widget.librarySync.syncNow);
+    _listener = AppLifecycleListener(
+      onResume: widget.librarySync.syncNow,
+      // Push the latest reading position before the OS may suspend or kill us.
+      onHide: widget.librarySync.flushProgress,
+    );
   }
 
   @override

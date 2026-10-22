@@ -7,11 +7,14 @@ import 'package:pdfrx/pdfrx.dart';
 import '../models/book.dart';
 import '../services/library_store.dart';
 import '../services/page_image_regions.dart';
+import '../sync/library_sync.dart';
+import '../sync/progress_record.dart';
 
 class ReaderScreen extends StatefulWidget {
-  const ReaderScreen({super.key, required this.store, required this.book});
+  const ReaderScreen({super.key, required this.store, required this.librarySync, required this.book});
 
   final LibraryStore store;
+  final LibrarySync librarySync;
   final Book book;
 
   @override
@@ -32,26 +35,93 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   PageImageRegions? _imageRegions;
 
+  /// The other device's position currently offered in the banner.
+  ProgressRecord? _offeredJump;
+  bool _viewerReady = false;
+  ScaffoldMessengerState? _messenger;
+
+  LibrarySync get _sync => widget.librarySync;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _messenger = ScaffoldMessenger.of(context);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _sync.openBookId = widget.book.id;
+    _sync.addListener(_onSyncChanged);
+    _sync.checkProgress(widget.book);
+  }
+
   @override
   void dispose() {
     _saveTimer?.cancel();
     _controller.removeListener(_onViewChanged);
+    _sync.removeListener(_onSyncChanged);
+    if (_sync.openBookId == widget.book.id) _sync.openBookId = null;
+    // The banner lives on the app-wide messenger; don't leave it on the library.
+    if (_offeredJump != null) _messenger?.clearMaterialBanners();
     _imageRegions?.dispose();
     _saveProgress();
     _focusNode.dispose();
     super.dispose();
   }
 
-  void _saveProgress() {
+  Future<void> _saveProgress() async {
     final page = _page;
     if (page == null) return;
-    widget.store.updateProgress(
+    await widget.store.updateProgress(
       widget.book.id,
       page: page,
       pageCount: _pageCount,
       pageOffset: _pageOffset,
       zoom: _zoom,
     );
+    _sync.progressChanged(widget.book.id);
+  }
+
+  /// Shows or hides the "Jump to page X (from …)?" banner as sync finds a
+  /// newer position from another device.
+  void _onSyncChanged() {
+    if (!mounted || !_viewerReady) return;
+    final pending = _sync.pendingJumpFor(widget.book.id);
+    if (pending?.updated == _offeredJump?.updated && pending?.page == _offeredJump?.page) return;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearMaterialBanners();
+    _offeredJump = pending;
+    if (pending == null) return;
+    messenger.showMaterialBanner(MaterialBanner(
+      leading: const Icon(Icons.devices_outlined),
+      content: Text('Jump to page ${pending.page} (from ${pending.device})?'),
+      actions: [
+        TextButton(onPressed: _declineJump, child: const Text('Stay here')),
+        FilledButton.tonal(onPressed: _acceptJump, child: Text('Go to page ${pending.page}')),
+      ],
+    ));
+  }
+
+  Future<void> _acceptJump() async {
+    ScaffoldMessenger.of(context).clearMaterialBanners();
+    _offeredJump = null;
+    final record = await _sync.acceptJump(widget.book.id);
+    if (record == null || !mounted || !_controller.isReady) return;
+    final offset = record.pageOffset;
+    if (offset == null) {
+      await _controller.goToPage(pageNumber: record.page.clamp(1, _controller.pageCount));
+    } else {
+      await _goToPosition(record.page, offset);
+    }
+    _focusNode.requestFocus();
+  }
+
+  Future<void> _declineJump() async {
+    ScaffoldMessenger.of(context).clearMaterialBanners();
+    _offeredJump = null;
+    await _sync.declineJump(widget.book.id);
+    _focusNode.requestFocus();
   }
 
   void _scheduleSave() {
@@ -90,7 +160,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _page = controller.pageNumber ?? widget.book.lastPage;
     });
     _restoreExactPosition().whenComplete(() {
-      if (mounted) _controller.addListener(_onViewChanged);
+      if (!mounted) return;
+      _controller.addListener(_onViewChanged);
+      _viewerReady = true;
+      _onSyncChanged();
     });
   }
 
@@ -99,11 +172,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Future<void> _restoreExactPosition() async {
     final book = widget.book;
     final x = book.pageOffsetX, y = book.pageOffsetY;
-    if (x == null || y == null || book.lastPage > _controller.pageCount) return;
-    final pageRect = _controller.layout.pageLayouts[book.lastPage - 1];
+    if (x == null || y == null) return;
     final zoom = book.zoom?.clamp(_controller.minScale, _controller.maxScale);
+    await _goToPosition(book.lastPage, Offset(x, y), zoom: zoom);
+  }
+
+  /// Scrolls so the viewport's top-left is at [offset] (fractions of the page
+  /// size) within [page].
+  Future<void> _goToPosition(int page, Offset offset, {double? zoom}) async {
+    if (page < 1 || page > _controller.pageCount) return;
+    final pageRect = _controller.layout.pageLayouts[page - 1];
     await _controller.goToPosition(
-      documentOffset: Offset(pageRect.left + x * pageRect.width, pageRect.top + y * pageRect.height),
+      documentOffset: Offset(pageRect.left + offset.dx * pageRect.width, pageRect.top + offset.dy * pageRect.height),
       zoom: zoom,
     );
   }

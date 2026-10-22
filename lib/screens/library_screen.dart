@@ -136,7 +136,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
     store.markOpened(book.id);
     await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => ReaderScreen(store: store, book: book)),
+      MaterialPageRoute(builder: (_) => ReaderScreen(store: store, librarySync: librarySync, book: book)),
     );
   }
 

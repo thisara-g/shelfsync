@@ -17,6 +17,7 @@ class Book {
     this.driveFileId,
     this.sizeBytes,
     this.isLocal = true,
+    this.progressUpdatedAt,
   });
 
   final String id;
@@ -42,6 +43,10 @@ class Book {
   String? driveFileId;
   int? sizeBytes;
 
+  /// When the reading position last changed (here, or as adopted from another
+  /// device). Compared across devices: the latest position wins.
+  DateTime? progressUpdatedAt;
+
   /// Whether the PDF is downloaded on this device. Not persisted: derived from
   /// the file's presence when the library loads.
   bool isLocal;
@@ -64,6 +69,9 @@ class Book {
         zoom: (json['zoom'] as num?)?.toDouble(),
         driveFileId: json['driveFileId'] as String?,
         sizeBytes: json['sizeBytes'] as int?,
+        progressUpdatedAt: json['progressUpdatedAt'] == null
+            ? null
+            : DateTime.fromMillisecondsSinceEpoch(json['progressUpdatedAt'] as int),
         lastOpenedAt: json['lastOpenedAt'] == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch(json['lastOpenedAt'] as int),
@@ -81,6 +89,7 @@ class Book {
         'zoom': zoom,
         'driveFileId': driveFileId,
         'sizeBytes': sizeBytes,
+        'progressUpdatedAt': progressUpdatedAt?.millisecondsSinceEpoch,
         'lastOpenedAt': lastOpenedAt?.millisecondsSinceEpoch,
       };
 }

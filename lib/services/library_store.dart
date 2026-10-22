@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
+import 'dart:math';
 import 'dart:ui' show Offset;
 
 import 'package:crypto/crypto.dart';
@@ -21,6 +22,14 @@ class LibraryStore extends ChangeNotifier {
   final Map<String, Book> _books = {};
   bool _darkReader = false;
   String? _syncAccount;
+  String _deviceId = '';
+  String _deviceName = '';
+
+  /// Random id identifying this installation in synced progress records.
+  String get deviceId => _deviceId;
+
+  /// Human-readable name shown on other devices ("from ubuntu-pc").
+  String get deviceName => _deviceName;
 
   /// Whether the reader shows pages in dark mode (applies to all books).
   bool get darkReader => _darkReader;
@@ -54,6 +63,8 @@ class LibraryStore extends ChangeNotifier {
       final settings = json['settings'] as Map<String, dynamic>? ?? const {};
       _darkReader = settings['darkReader'] as bool? ?? false;
       _syncAccount = settings['syncAccount'] as String?;
+      _deviceId = settings['deviceId'] as String? ?? '';
+      _deviceName = settings['deviceName'] as String? ?? '';
       for (final entry in json['books'] as List<dynamic>) {
         final book = Book.fromJson(entry as Map<String, dynamic>);
         book.isLocal = await fileFor(book).exists();
@@ -61,14 +72,36 @@ class LibraryStore extends ChangeNotifier {
         if (book.isLocal || book.driveFileId != null) _books[book.id] = book;
       }
     }
+    var changed = false;
+    if (_deviceId.isEmpty) {
+      final random = Random.secure();
+      _deviceId = List.generate(16, (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+      changed = true;
+    }
+    if (_deviceName.isEmpty) {
+      _deviceName = _defaultDeviceName();
+      changed = true;
+    }
+    if (changed) await _save();
     notifyListeners();
+  }
+
+  static String _defaultDeviceName() {
+    if (Platform.isAndroid) return 'Android tablet';
+    final host = Platform.localHostname;
+    return host.isEmpty || host == 'localhost' ? Platform.operatingSystem : host;
   }
 
   Future<void> _save() async {
     final tmp = File('${_indexFile.path}.tmp');
     final json = {
       'version': 1,
-      'settings': {'darkReader': _darkReader, 'syncAccount': _syncAccount},
+      'settings': {
+        'darkReader': _darkReader,
+        'syncAccount': _syncAccount,
+        'deviceId': _deviceId,
+        'deviceName': _deviceName,
+      },
       'books': _books.values.map((b) => b.toJson()).toList(),
     };
     await tmp.writeAsString(const JsonEncoder.withIndent('  ').convert(json), flush: true);
@@ -210,6 +243,7 @@ class LibraryStore extends ChangeNotifier {
         (pageOffset == null || (book.pageOffsetX == pageOffset.dx && book.pageOffsetY == pageOffset.dy)) &&
         (zoom == null || book.zoom == zoom);
     if (unchanged) return;
+    if (_movedFrom(book, page, pageOffset)) book.progressUpdatedAt = DateTime.now();
     book.lastPage = page;
     if (pageCount != null) book.pageCount = pageCount;
     if (pageOffset != null) {
@@ -217,6 +251,46 @@ class LibraryStore extends ChangeNotifier {
       book.pageOffsetY = pageOffset.dy;
     }
     if (zoom != null) book.zoom = zoom;
+    await _save();
+    notifyListeners();
+  }
+
+  /// Whether the reader genuinely moved. Re-deriving the in-page offset after
+  /// opening a book differs by rounding noise, which must not count: a fresh
+  /// timestamp would make a stale position beat newer progress from another
+  /// device.
+  static bool _movedFrom(Book book, int page, Offset? offset) {
+    if (book.lastPage != page) return true;
+    final x = book.pageOffsetX, y = book.pageOffsetY;
+    if (offset == null || x == null || y == null) return false;
+    return (offset.dx - x).abs() > 0.02 || (offset.dy - y).abs() > 0.02;
+  }
+
+  /// Adopts a reading position synced from another device. Zoom is left as
+  /// is: it depends on this device's screen.
+  Future<void> applyRemoteProgress(
+    String id, {
+    required int page,
+    required Offset? pageOffset,
+    required DateTime updatedAt,
+  }) async {
+    final book = _books[id];
+    if (book == null) return;
+    book
+      ..lastPage = page
+      ..pageOffsetX = pageOffset?.dx
+      ..pageOffsetY = pageOffset?.dy
+      ..progressUpdatedAt = updatedAt;
+    await _save();
+    notifyListeners();
+  }
+
+  /// Marks the local position as the newest, e.g. when the user declines to
+  /// jump to another device's position, so this one wins and gets pushed.
+  Future<void> touchProgress(String id) async {
+    final book = _books[id];
+    if (book == null) return;
+    book.progressUpdatedAt = DateTime.now();
     await _save();
     notifyListeners();
   }

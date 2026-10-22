@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
+
+import 'progress_record.dart';
 
 class DriveAccount {
   const DriveAccount({required this.email, required this.displayName});
@@ -188,6 +191,68 @@ class DriveService {
     } catch (_) {
       return null;
     }
+  }
+
+  static const _progressQuery = "appProperties has { key='shelfsync' and value='progress' }";
+  static const _progressFields = 'nextPageToken, files(id, appProperties)';
+
+  /// Every reading-position record in the hidden appDataFolder, by book id.
+  Future<Map<String, StoredProgress>> listProgress() async {
+    final records = <String, StoredProgress>{};
+    String? pageToken;
+    do {
+      final page = await api.files.list(
+        spaces: 'appDataFolder',
+        q: _progressQuery,
+        pageSize: 1000,
+        pageToken: pageToken,
+        $fields: _progressFields,
+      );
+      for (final f in page.files ?? const <drive.File>[]) {
+        final record = ProgressRecord.fromAppProperties(f.appProperties);
+        if (f.id == null || record == null) continue;
+        // Should be one file per book; if two devices raced, keep the newest.
+        final existing = records[record.bookId];
+        if (existing == null || record.updated.isAfter(existing.record.updated)) {
+          records[record.bookId] = StoredProgress(f.id!, record);
+        }
+      }
+      pageToken = page.nextPageToken;
+    } while (pageToken != null);
+    return records;
+  }
+
+  /// The record for one book, for a quick check when it's opened.
+  Future<StoredProgress?> getProgress(String bookId) async {
+    final result = await api.files.list(
+      spaces: 'appDataFolder',
+      q: "name = '${ProgressRecord.fileNameFor(bookId)}' and $_progressQuery",
+      $fields: _progressFields,
+    );
+    StoredProgress? newest;
+    for (final f in result.files ?? const <drive.File>[]) {
+      final record = ProgressRecord.fromAppProperties(f.appProperties);
+      if (f.id == null || record == null) continue;
+      if (newest == null || record.updated.isAfter(newest.record.updated)) newest = StoredProgress(f.id!, record);
+    }
+    return newest;
+  }
+
+  /// Creates or overwrites a book's record. Returns the Drive file id.
+  Future<String> putProgress(ProgressRecord record, {String? existingFileId}) async {
+    final bytes = utf8.encode(const JsonEncoder.withIndent('  ').convert(record.toJson()));
+    final media = drive.Media(Stream.value(bytes), bytes.length, contentType: 'application/json');
+    final metadata = drive.File(appProperties: record.toAppProperties());
+    if (existingFileId != null) {
+      final updated = await api.files.update(metadata, existingFileId, uploadMedia: media, $fields: 'id');
+      return updated.id!;
+    }
+    metadata
+      ..name = ProgressRecord.fileNameFor(record.bookId)
+      ..parents = ['appDataFolder']
+      ..mimeType = 'application/json';
+    final created = await api.files.create(metadata, uploadMedia: media, $fields: 'id');
+    return created.id!;
   }
 
   static Uri folderUrl(String folderId) => Uri.parse('https://drive.google.com/drive/folders/$folderId');

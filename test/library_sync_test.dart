@@ -8,6 +8,7 @@ import 'package:shelfsync/services/library_store.dart';
 import 'package:shelfsync/sync/drive_service.dart';
 import 'package:shelfsync/sync/google_auth.dart';
 import 'package:shelfsync/sync/library_sync.dart';
+import 'package:shelfsync/sync/progress_record.dart';
 import 'package:shelfsync/sync/sync_controller.dart';
 
 class CloudFile {
@@ -24,6 +25,9 @@ class CloudFile {
 /// One Google Drive shared by several simulated devices.
 class FakeCloud {
   final files = <CloudFile>[];
+
+  /// appDataFolder progress files: file id -> record.
+  final progress = <String, ProgressRecord>{};
   var email = 'reader@example.com';
   var _nextId = 0;
   var _clock = DateTime(2026, 1, 1);
@@ -101,6 +105,21 @@ class FakeDriveService implements DriveService {
 
   @override
   Future<Uint8List?> thumbnail(String link) async => null;
+
+  @override
+  Future<Map<String, StoredProgress>> listProgress() async => {
+        for (final e in cloud.progress.entries) e.value.bookId: StoredProgress(e.key, e.value),
+      };
+
+  @override
+  Future<StoredProgress?> getProgress(String bookId) async => (await listProgress())[bookId];
+
+  @override
+  Future<String> putProgress(ProgressRecord record, {String? existingFileId}) async {
+    final id = existingFileId ?? 'progress-${cloud.progress.length}';
+    cloud.progress[id] = record;
+    return id;
+  }
 }
 
 class _SignedInAuth implements GoogleAuth {
@@ -236,6 +255,107 @@ void main() {
     await pc.library.syncNow();
     expect(cloud.live.map((f) => f.id), [first.id]);
     expect(pc.store.byId(id)!.driveFileId, first.id);
+  });
+
+  group('reading position', () {
+    late String id;
+
+    /// Both devices have the book downloaded.
+    setUp(() async {
+      await pc.store.importFile(pdf.path);
+      id = pc.store.books.single.id;
+      await pc.library.syncNow();
+      await tablet.library.syncNow();
+      await tablet.library.download(tablet.store.byId(id)!);
+    });
+
+    Future<void> read(Device d, int page, {Offset offset = const Offset(0, 0.3)}) async {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await d.store.updateProgress(id, page: page, pageCount: 300, pageOffset: offset);
+      d.library.progressChanged(id);
+      await d.library.flushProgress();
+    }
+
+    test('is uploaded with the device name and adopted silently where unread', () async {
+      await read(pc, 50, offset: const Offset(0, 0.42));
+      final record = cloud.progress.values.single;
+      expect(record.page, 50);
+      expect(record.device, pc.store.deviceName);
+      expect(record.pageOffset!.dy, closeTo(0.42, 1e-9));
+
+      await tablet.library.syncNow();
+      final book = tablet.store.byId(id)!;
+      expect(book.lastPage, 50);
+      expect(book.pageOffsetY, closeTo(0.42, 1e-9));
+      expect(tablet.library.pendingJumpFor(id), isNull);
+    });
+
+    test('a different page on an already-read book prompts instead of moving', () async {
+      await read(pc, 50);
+      await tablet.library.syncNow();
+      await read(tablet, 120);
+
+      await pc.library.syncNow();
+      final pending = pc.library.pendingJumpFor(id);
+      expect(pending, isNotNull);
+      expect(pending!.page, 120);
+      expect(pending.device, tablet.store.deviceName);
+      expect(pc.store.byId(id)!.lastPage, 50, reason: 'not moved silently');
+
+      await pc.library.acceptJump(id);
+      expect(pc.store.byId(id)!.lastPage, 120);
+      expect(pc.library.pendingJumpFor(id), isNull);
+
+      // Accepting must not re-upload the position as if read on the PC.
+      await pc.library.syncNow();
+      expect(cloud.progress.values.single.device, tablet.store.deviceName);
+    });
+
+    test('declining keeps this position and makes the other device ask', () async {
+      await read(pc, 50);
+      await tablet.library.syncNow();
+      await read(tablet, 120);
+      await pc.library.syncNow();
+
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await pc.library.declineJump(id);
+      await pc.library.flushProgress();
+      expect(pc.store.byId(id)!.lastPage, 50);
+      expect(cloud.progress.values.single.page, 50);
+
+      await tablet.library.syncNow();
+      expect(tablet.library.pendingJumpFor(id)?.page, 50);
+    });
+
+    test('reading on instead of answering withdraws the prompt', () async {
+      await read(pc, 50);
+      await tablet.library.syncNow();
+      await read(tablet, 120);
+      await pc.library.syncNow();
+      expect(pc.library.pendingJumpFor(id), isNotNull);
+
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await pc.store.updateProgress(id, page: 60, pageCount: 300, pageOffset: const Offset(0, 0.1));
+      await pc.library.syncNow();
+      expect(pc.library.pendingJumpFor(id), isNull);
+      expect(cloud.progress.values.single.page, 60);
+    });
+
+    test('the book open in the reader is never moved silently', () async {
+      await read(pc, 50);
+      tablet.library.openBookId = id; // unread on the tablet, but open
+      await tablet.library.checkProgress(tablet.store.byId(id)!);
+      expect(tablet.library.pendingJumpFor(id)?.page, 50);
+      expect(tablet.store.byId(id)!.lastPage, 1);
+    });
+
+    test('re-deriving the same spot on open does not count as reading', () async {
+      await read(pc, 50, offset: const Offset(0, 0.42));
+      final before = pc.store.byId(id)!.progressUpdatedAt;
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await pc.store.updateProgress(id, page: 50, pageOffset: const Offset(0.0001, 0.4203), zoom: 1.2);
+      expect(pc.store.byId(id)!.progressUpdatedAt, before);
+    });
   });
 
   test('switching Google accounts unlinks books instead of deleting them', () async {
