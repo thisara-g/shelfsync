@@ -35,13 +35,31 @@ Problem it solves: reading the same book on PC and tablet without manually copyi
 4. Reading-position sync via `appDataFolder`, with the "jump to page X?" prompt.
 5. `./setup` script + README so anyone can clone and set it up without reading external docs.
 
-## Environment / prerequisites still to do on this PC
-User has not yet confirmed installing these — ask before downloading:
-- Flutter SDK (~1 GB, official Flutter releases)
-- Android SDK command-line tools + platform/build-tools (~3–4 GB, dl.google.com)
-- apt: `clang cmake ninja-build pkg-config libgtk-3-dev openjdk-17-jdk` (~500 MB; needs the user's sudo password)
-- GitHub: create the private repo with `gh` (user does `gh auth login` themselves if not logged in).
-- Tablet: install the APK via USB debugging (`flutter install` / `adb`) or by sideloading.
+## Status (2026-10-23)
+All five stages are implemented and committed, and they build for Linux and Android. Only the steps that need the user are left (see below).
+Extras beyond the original plan:
+- cover grid with first-page thumbnails
+- exact in-page resume position
+- dark pages that keep images un-inverted (via PDFium image bounds)
+
+Still to do with the user (physical checks):
+- run `./setup` for real to create the Cloud project and OAuth clients
+- test sign-in on Linux and Android
+- test the two-device book and position sync
+- install the APK on the tablet
+- create the private GitHub repo `thisara-g/shelfsync` and push (confirm with the user first)
+
+## Environment on this PC (installed)
+- Flutter: `~/development/flutter` (stable).
+- Android SDK: `~/Android/Sdk`.
+- JDK 21: Flutter is configured with `--jdk-dir`. The system default is Java 25, which Gradle can't use.
+- PATH and ANDROID_HOME are set in `~/.bashrc`. Non-interactive shells need `export PATH=~/development/flutter/bin:$PATH`.
+- sudo can't prompt from Claude's shell. `pkexec <cmd>` works: the user approves a GUI password dialog.
+- Android cmdline-tools 23+ replaced sdkmanager with the `android` CLI:
+  - use `android --no-metrics --sdk=$ANDROID_HOME sdk install platform-tools platforms/android-36 …`, with slash paths, not semicolons
+  - an orphaned `android` process once caused a "Text file busy" error
+- The Gradle heap is lowered to 2.5 GB in `android/gradle.properties`, because the machine has 6.9 GB RAM.
+- The first Android build took about 35 minutes, since Gradle fetched the NDK and CMake. Later builds take seconds.
 
 ## About the user
 Thisara Gunawardana (GitHub: thisara-g), final-year Electronic & Telecommunication Engineering student. Comfortable with Linux and the terminal. Was previously going to use KOReader + Syncthing for this, but wanted something with no manual file copying.

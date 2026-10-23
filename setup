@@ -1,0 +1,413 @@
+#!/usr/bin/env bash
+# ShelfSync setup: toolchain, your own Google Cloud OAuth clients, build, install.
+#
+#   ./setup               full guided setup (safe to re-run; finished steps are skipped)
+#   ./setup --no-build    stop after writing config/google_oauth.json
+#   ./setup --reconfigure forget the saved Google Cloud answers and ask again
+#   ./setup --help
+#
+# Everything that can be automated is; for the few Google Cloud Console steps
+# that can only be done by a human, the script opens the exact page and prints
+# the exact values to enter.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG_DIR="$REPO/config"
+CONFIG_FILE="$CONFIG_DIR/google_oauth.json"
+STATE_FILE="$REPO/.setup-state"
+
+PACKAGE_NAME="io.github.thisarag.shelfsync"
+FLUTTER_DIR="${FLUTTER_DIR:-$HOME/development/flutter}"
+ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
+ANDROID_PLATFORM="android-36"
+ANDROID_BUILD_TOOLS="36.0.0"
+APT_PACKAGES=(git curl unzip xz-utils zip clang cmake ninja-build pkg-config libgtk-3-dev libglu1-mesa openjdk-21-jdk)
+
+BUILD=1
+for arg in "$@"; do
+  case "$arg" in
+    --no-build) BUILD=0 ;;
+    --reconfigure) rm -f "$STATE_FILE" ;;
+    -h|--help) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "Unknown option: $arg (see ./setup --help)"; exit 1 ;;
+  esac
+done
+
+# ---------------------------------------------------------------- helpers ---
+
+if [[ -t 1 ]]; then
+  B=$'\e[1m'; DIM=$'\e[2m'; G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; C=$'\e[36m'; N=$'\e[0m'
+else
+  B=; DIM=; G=; Y=; R=; C=; N=
+fi
+
+STEP=0
+step()  { STEP=$((STEP + 1)); printf '\n%s━━ Step %d: %s%s\n' "$B$C" "$STEP" "$1" "$N"; }
+info()  { printf '   %s\n' "$*"; }
+ok()    { printf '   %s✓%s %s\n' "$G" "$N" "$*"; }
+warn()  { printf '   %s!%s %s\n' "$Y" "$N" "$*"; }
+die()   { printf '\n%s✗ %s%s\n' "$R" "$*" "$N" >&2; exit 1; }
+value() { printf '       %s%s%s\n' "$B" "$*" "$N"; }
+
+ask_yes() { # ask_yes "Question" [default y|n]
+  local default="${2:-y}" hint reply
+  [[ "$default" == y ]] && hint="[Y/n]" || hint="[y/N]"
+  read -r -p "   $1 $hint " reply </dev/tty || reply=""
+  reply="${reply:-$default}"
+  [[ "$reply" =~ ^[Yy] ]]
+}
+
+prompt() { # prompt VAR "Question" [validator-regex]
+  local __var="$1" question="$2" pattern="${3:-.+}" reply
+  while true; do
+    read -r -p "   $question " reply </dev/tty || die "No input."
+    reply="$(printf '%s' "$reply" | tr -d '[:space:]')"
+    [[ "$reply" =~ $pattern ]] && break
+    warn "That doesn't look right, please try again."
+  done
+  printf -v "$__var" '%s' "$reply"
+}
+
+pause() { read -r -p "   ${DIM}Press Enter when done…${N} " _ </dev/tty || true; }
+
+open_url() {
+  info "Opening: ${C}$1${N}"
+  if command -v xdg-open >/dev/null && [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
+    xdg-open "$1" >/dev/null 2>&1 &
+  else
+    info "(Open that link in a browser.)"
+  fi
+}
+
+state_get() { [[ -f "$STATE_FILE" ]] && sed -n "s/^$1=//p" "$STATE_FILE" | tail -1 || true; }
+state_set() {
+  mkdir -p "$CONFIG_DIR"
+  touch "$STATE_FILE"
+  grep -v "^$1=" "$STATE_FILE" > "$STATE_FILE.tmp" || true
+  printf '%s=%s\n' "$1" "$2" >> "$STATE_FILE.tmp"
+  mv "$STATE_FILE.tmp" "$STATE_FILE"
+}
+
+add_to_bashrc() { # add_to_bashrc "line"
+  grep -qxF "$1" "$HOME/.bashrc" 2>/dev/null || printf '%s\n' "$1" >> "$HOME/.bashrc"
+}
+
+run_sudo() {
+  if sudo -n true 2>/dev/null; then sudo "$@"
+  elif [[ -t 0 ]]; then sudo "$@"
+  elif command -v pkexec >/dev/null; then pkexec "$@"
+  else die "Need administrator rights to run: $*"
+  fi
+}
+
+# --------------------------------------------------------------- toolchain ---
+
+install_apt_packages() {
+  step "System packages"
+  local missing=()
+  for pkg in "${APT_PACKAGES[@]}"; do
+    dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+  done
+  if ((${#missing[@]} == 0)); then ok "All present."; return; fi
+  command -v apt-get >/dev/null || die "Missing ${missing[*]}; install them with your package manager and re-run."
+  info "Missing: ${missing[*]} (~500 MB, needs your password)"
+  ask_yes "Install them with apt?" || die "These packages are required to build ShelfSync."
+  run_sudo apt-get update
+  run_sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y "${missing[@]}"
+  ok "Installed."
+}
+
+JAVA_HOME_21=""
+find_jdk() {
+  for dir in /usr/lib/jvm/java-21-openjdk-* /usr/lib/jvm/java-17-openjdk-*; do
+    [[ -x "$dir/bin/keytool" ]] && { JAVA_HOME_21="$dir"; return; }
+  done
+  die "JDK 17 or 21 not found (the Android build needs one; newer JDKs are not supported by Gradle yet)."
+}
+
+install_flutter() {
+  step "Flutter SDK"
+  if command -v flutter >/dev/null; then
+    FLUTTER="$(command -v flutter)"
+  elif [[ -x "$FLUTTER_DIR/bin/flutter" ]]; then
+    FLUTTER="$FLUTTER_DIR/bin/flutter"
+  else
+    info "Flutter isn't installed. It will be cloned to $FLUTTER_DIR (~1 GB)."
+    ask_yes "Download Flutter (stable)?" || die "Flutter is required."
+    mkdir -p "$(dirname "$FLUTTER_DIR")"
+    git clone --depth 1 -b stable https://github.com/flutter/flutter.git "$FLUTTER_DIR"
+    FLUTTER="$FLUTTER_DIR/bin/flutter"
+    add_to_bashrc "export PATH=\"$FLUTTER_DIR/bin:\$PATH\""
+    info "Added Flutter to PATH in ~/.bashrc (open a new terminal to use 'flutter' directly)."
+  fi
+  "$FLUTTER" --disable-analytics >/dev/null 2>&1 || true
+  ok "$("$FLUTTER" --version 2>/dev/null | head -1)"
+}
+
+install_android_sdk() {
+  step "Android SDK"
+  export ANDROID_HOME
+  local cli="$ANDROID_HOME/cmdline-tools/latest/bin"
+  if [[ ! -x "$cli/sdkmanager" ]]; then
+    info "The Android SDK isn't installed. It will go to $ANDROID_HOME (~3–4 GB including what the first build fetches)."
+    ask_yes "Download the Android SDK command-line tools?" || die "The Android SDK is required to build for the tablet."
+    local zip tmp
+    zip="$(curl -fsSL https://dl.google.com/android/repository/repository2-3.xml \
+      | grep -oE 'commandlinetools-linux-[0-9]+_latest\.zip' | sort -t- -k3 -n | tail -1)"
+    [[ -n "$zip" ]] || die "Couldn't find the command-line tools download."
+    tmp="$(mktemp -d)"
+    curl -fL --progress-bar -o "$tmp/clt.zip" "https://dl.google.com/android/repository/$zip"
+    unzip -q "$tmp/clt.zip" -d "$tmp"
+    mkdir -p "$ANDROID_HOME/cmdline-tools"
+    rm -rf "$ANDROID_HOME/cmdline-tools/latest"
+    mv "$tmp/cmdline-tools" "$ANDROID_HOME/cmdline-tools/latest"
+    rm -rf "$tmp"
+    add_to_bashrc "export ANDROID_HOME=\"$ANDROID_HOME\""
+    add_to_bashrc "export PATH=\"\$ANDROID_HOME/cmdline-tools/latest/bin:\$ANDROID_HOME/platform-tools:\$PATH\""
+  fi
+
+  if [[ -d "$ANDROID_HOME/platforms/$ANDROID_PLATFORM" && -d "$ANDROID_HOME/build-tools/$ANDROID_BUILD_TOOLS" \
+        && -x "$ANDROID_HOME/platform-tools/adb" ]]; then
+    ok "SDK packages present."
+  else
+    info "Installing platform-tools, $ANDROID_PLATFORM and build-tools $ANDROID_BUILD_TOOLS (this accepts the Android SDK licence)…"
+    if [[ -x "$cli/android" ]]; then
+      # cmdline-tools 23+: sdkmanager is a wrapper around the new Android CLI.
+      JAVA_HOME="$JAVA_HOME_21" "$cli/android" --no-metrics --sdk="$ANDROID_HOME" sdk install \
+        platform-tools "platforms/$ANDROID_PLATFORM" "build-tools/$ANDROID_BUILD_TOOLS"
+    else
+      yes 2>/dev/null | JAVA_HOME="$JAVA_HOME_21" "$cli/sdkmanager" --licenses >/dev/null || true
+      JAVA_HOME="$JAVA_HOME_21" "$cli/sdkmanager" platform-tools "platforms;$ANDROID_PLATFORM" "build-tools;$ANDROID_BUILD_TOOLS"
+    fi
+    ok "SDK packages installed."
+  fi
+  "$FLUTTER" config --android-sdk "$ANDROID_HOME" --jdk-dir "$JAVA_HOME_21" >/dev/null
+  ok "Flutter uses JDK at $JAVA_HOME_21"
+}
+
+# ------------------------------------------------------------ Google Cloud ---
+
+ensure_project() {
+  step "Google Cloud project"
+  PROJECT_ID="$(state_get project_id)"
+  if [[ -n "$PROJECT_ID" ]]; then ok "Using project ${B}$PROJECT_ID${N}"; return; fi
+
+  info "ShelfSync stores your books in ${B}your own${N} Google Drive. Google requires every app that"
+  info "uses Drive to have its own (free) Google Cloud project, so you'll create one now."
+  info "Nothing here costs money or needs a credit card."
+
+  if command -v gcloud >/dev/null && ask_yes "gcloud is installed. Create the project and enable the Drive API with it?"; then
+    if [[ -z "$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null)" ]]; then
+      gcloud auth login
+    fi
+    local id="shelfsync-$(tr -dc 'a-z0-9' </dev/urandom | head -c 6)"
+    if gcloud projects create "$id" --name="ShelfSync" && gcloud services enable drive.googleapis.com --project "$id"; then
+      PROJECT_ID="$id"
+      state_set project_id "$PROJECT_ID"
+      state_set drive_api 1
+      ok "Created project ${B}$PROJECT_ID${N} and enabled the Drive API."
+      return
+    fi
+    warn "gcloud couldn't do it (often: Cloud terms not accepted yet). Falling back to the Console."
+  fi
+
+  info ""
+  info "1. Sign in with the Google account whose Drive should hold your books."
+  info "2. Project name: ${B}ShelfSync${N} (any name works). Organization: leave as is. Click ${B}Create${N}."
+  info "3. Copy the ${B}Project ID${N} shown under the name (e.g. shelfsync-123456)."
+  open_url "https://console.cloud.google.com/projectcreate"
+  prompt PROJECT_ID "Paste the Project ID:" '^[a-z][a-z0-9-]{4,28}[a-z0-9]$'
+  state_set project_id "$PROJECT_ID"
+  ok "Project ${B}$PROJECT_ID${N}"
+}
+
+enable_drive_api() {
+  step "Enable the Google Drive API"
+  if [[ "$(state_get drive_api)" == 1 ]]; then ok "Already enabled."; return; fi
+  if command -v gcloud >/dev/null && gcloud services enable drive.googleapis.com --project "$PROJECT_ID" 2>/dev/null; then
+    ok "Enabled with gcloud."
+  else
+    info "Click the blue ${B}Enable${N} button on the page that opens."
+    open_url "https://console.cloud.google.com/apis/library/drive.googleapis.com?project=$PROJECT_ID"
+    pause
+  fi
+  state_set drive_api 1
+}
+
+configure_consent() {
+  step "OAuth consent screen (one-time, ~1 minute)"
+  if [[ "$(state_get consent)" == 1 ]]; then ok "Already done."; return; fi
+  info "This is the screen Google shows when you sign in to ShelfSync. If the page says"
+  info "${B}Get started${N}, click it and fill in:"
+  value "App name:            ShelfSync"
+  value "User support email:  your email"
+  value "Audience:            External"
+  value "Contact email:       your email"
+  info "then agree to the policy and click ${B}Create${N}."
+  open_url "https://console.cloud.google.com/auth/branding?project=$PROJECT_ID"
+  pause
+
+  info ""
+  info "Now publish it, so sign-ins don't expire every 7 days (the default \"Testing\" mode)."
+  info "On the ${B}Audience${N} page: under Publishing status click ${B}Publish app${N} → ${B}Confirm${N}."
+  info "ShelfSync only asks for non-sensitive Drive access (files it creates itself), so"
+  info "Google does not need to review or verify anything."
+  open_url "https://console.cloud.google.com/auth/audience?project=$PROJECT_ID"
+  pause
+  state_set consent 1
+  ok "Consent screen configured."
+}
+
+create_desktop_client() {
+  step "OAuth client for the Linux app"
+  local id secret
+  id="$(state_get desktop_client_id)"
+  secret="$(state_get desktop_client_secret)"
+  if [[ -n "$id" && -n "$secret" ]]; then ok "Using $id"; DESKTOP_ID="$id"; DESKTOP_SECRET="$secret"; return; fi
+
+  info "On the page that opens:"
+  value "Application type:  Desktop app"
+  value "Name:              ShelfSync Linux"
+  info "Click ${B}Create${N}. A dialog shows the Client ID and Client secret."
+  info "You can paste both here, or download the JSON and give its path."
+  open_url "https://console.cloud.google.com/auth/clients/create?project=$PROJECT_ID"
+
+  local answer
+  read -r -p "   Paste the Client ID (or the path to the downloaded .json): " answer </dev/tty || die "No input."
+  answer="${answer/#\~/$HOME}"
+  answer="$(printf '%s' "$answer" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+  if [[ -f "$answer" ]]; then
+    read -r id secret < <(python3 - "$answer" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+c = data.get("installed") or data.get("web") or {}
+print(c.get("client_id", ""), c.get("client_secret", ""))
+PY
+)
+  else
+    id="$answer"
+    prompt secret "Paste the Client secret:" '^[A-Za-z0-9_-]{10,}$'
+  fi
+  [[ "$id" =~ \.apps\.googleusercontent\.com$ ]] || die "That isn't an OAuth client ID (it should end in .apps.googleusercontent.com)."
+  [[ -n "$secret" ]] || die "No client secret found."
+  state_set desktop_client_id "$id"
+  state_set desktop_client_secret "$secret"
+  DESKTOP_ID="$id"; DESKTOP_SECRET="$secret"
+  ok "Saved."
+}
+
+debug_keystore_sha1() {
+  local ks="$HOME/.android/debug.keystore" keytool="$JAVA_HOME_21/bin/keytool"
+  if [[ ! -f "$ks" ]]; then
+    mkdir -p "$HOME/.android"
+    "$keytool" -genkeypair -keystore "$ks" -storepass android -alias androiddebugkey -keypass android \
+      -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+  fi
+  "$keytool" -list -v -keystore "$ks" -alias androiddebugkey -storepass android 2>/dev/null \
+    | sed -n 's/^[[:space:]]*SHA1:[[:space:]]*//p' | head -1
+}
+
+create_android_client() {
+  step "OAuth client for the Android app"
+  local sha1
+  sha1="$(debug_keystore_sha1)"
+  [[ -n "$sha1" ]] || die "Couldn't read the signing key's SHA-1."
+  if [[ "$(state_get android_client_sha1)" == "$sha1" ]]; then ok "Already created for this signing key."; return; fi
+
+  info "The tablet app is signed with this computer's key; Google identifies the app by"
+  info "its package name and that key's fingerprint. Create one more client:"
+  value "Application type:          Android"
+  value "Name:                      ShelfSync Android"
+  value "Package name:              $PACKAGE_NAME"
+  value "SHA-1 certificate:         $sha1"
+  info "Click ${B}Create${N}. Nothing needs to be copied back."
+  open_url "https://console.cloud.google.com/auth/clients/create?project=$PROJECT_ID"
+  pause
+  state_set android_client_sha1 "$sha1"
+  ok "Done."
+}
+
+write_config() {
+  step "Write config/google_oauth.json"
+  mkdir -p "$CONFIG_DIR"
+  python3 - "$CONFIG_FILE" "$DESKTOP_ID" "$DESKTOP_SECRET" "$PROJECT_ID" <<'PY'
+import json, sys
+path, cid, secret, project = sys.argv[1:]
+json.dump({
+    "_comment": "Written by ./setup. Not committed (see .gitignore).",
+    "project_id": project,
+    "desktop": {"client_id": cid, "client_secret": secret},
+}, open(path, "w"), indent=2)
+PY
+  chmod 600 "$CONFIG_FILE"
+  ok "$CONFIG_FILE"
+}
+
+# ------------------------------------------------------------ build/install ---
+
+build_and_install() {
+  step "Build ShelfSync"
+  cd "$REPO"
+  "$FLUTTER" pub get >/dev/null
+  info "Building the Linux app…"
+  "$FLUTTER" build linux --release
+  info "Building the Android APK (the first build downloads extra Android components and can take a while)…"
+  "$FLUTTER" build apk --release
+  local apk="$REPO/build/app/outputs/flutter-apk/app-release.apk"
+  local bundle="$REPO/build/linux/x64/release/bundle"
+
+  step "Install"
+  local apps="$HOME/.local/share/applications"
+  mkdir -p "$apps"
+  cat > "$apps/$PACKAGE_NAME.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=ShelfSync
+Comment=Read PDFs and keep your place in sync across devices
+Exec="$bundle/shelfsync"
+Icon=$REPO/assets/icons/shelfsync.png
+Categories=Office;Viewer;
+MimeType=application/pdf;
+StartupWMClass=$PACKAGE_NAME
+Terminal=false
+EOF
+  update-desktop-database "$apps" >/dev/null 2>&1 || true
+  ok "Linux: ShelfSync is in your app launcher (or run $bundle/shelfsync)."
+
+  local adb="$ANDROID_HOME/platform-tools/adb"
+  if [[ -x "$adb" ]] && "$adb" devices | grep -q 'device$'; then
+    info "Installing on the connected Android device…"
+    if "$adb" install -r "$apk"; then
+      ok "Android: installed. Open ShelfSync on the tablet."
+    else
+      warn "Install failed. If an older ShelfSync built on another computer is installed, uninstall it first."
+    fi
+  else
+    ok "Android APK: $apk"
+    info "To install: enable Developer options + USB debugging on the tablet, plug it in, and run"
+    value "$adb install -r $apk"
+    info "or copy the APK to the tablet and open it there."
+  fi
+}
+
+# ------------------------------------------------------------------- main ---
+
+printf '%sShelfSync setup%s\n' "$B" "$N"
+info "Sets up the build tools, connects the app to your own Google Drive, and builds it."
+
+[[ "$(uname -s)" == Linux ]] || die "This script supports Linux (Ubuntu/Debian) only."
+
+install_apt_packages
+find_jdk
+install_flutter
+install_android_sdk
+ensure_project
+enable_drive_api
+configure_consent
+create_desktop_client
+create_android_client
+write_config
+if ((BUILD)); then build_and_install; fi
+
+printf '\n%s%sAll set!%s Open ShelfSync on each device and tap %sSign in%s. Use the same\n' "$B" "$G" "$N" "$B" "$N"
+printf 'Google account everywhere; a %sShelfSync%s folder appears in your Drive on first sign-in.\n' "$B" "$N"
