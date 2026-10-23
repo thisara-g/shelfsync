@@ -47,7 +47,7 @@ Still to do with the user (physical checks):
 - test sign-in on Linux and Android
 - test the two-device book and position sync
 - install the APK on the tablet
-- create the private GitHub repo `thisara-g/shelfsync` and push (confirm with the user first)
+- GitHub: private repo https://github.com/thisara-g/shelfsync was created on 2026-10-23, and `main` tracks `origin/main`
 
 ## Environment on this PC (installed)
 - Flutter: `~/development/flutter` (stable).
