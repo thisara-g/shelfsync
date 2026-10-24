@@ -374,7 +374,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final rect = _frameRect(page);
     final view = _controller.viewSize;
     final margin = _controller.params.margin;
-    final zoom = _userZoom ?? frameZoom(rect, view, margin, halveBars: _fullscreen && !_spread);
+    final zoom = _userZoom ?? frameZoom(rect, view, margin);
     final Offset position;
     if (rect.height * zoom <= view.height - margin * 2 + 1) {
       position = rect.center;
@@ -575,11 +575,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
     } else {
       _setChrome(!on);
     }
-    // Reframe once the window has settled at its new size (resizes reframe
-    // too, but the full-screen zoom must follow the new mode either way).
+    // Reframe once the window has settled at its new size. Entering full
+    // screen in Single zooms so the bars beside the page are half as wide,
+    // kept like a chosen zoom (so ↓/↑ keep it); ←/→ fit the page again.
     await Future<void>.delayed(const Duration(milliseconds: 400));
     if (!mounted || !_controller.isReady || _layout == ReaderLayout.scroll) return;
-    await _frame(_page ?? 1, fit: true);
+    final page = _page ?? 1;
+    if (on && !_spread) {
+      _userZoom = frameZoom(_frameRect(page), _controller.viewSize, _controller.params.margin, halveBars: true);
+      await _frame(page);
+    } else {
+      await _frame(page, fit: true);
+    }
   }
 
   // --- Desktop bars ---------------------------------------------------------

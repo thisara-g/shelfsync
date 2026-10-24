@@ -78,6 +78,17 @@ void main() {
     await settle();
     expect(c.pageNumber, 3);
     expect(c.currentZoom, closeTo(fit, 0.01));
+
+    // Full screen zooms in (half-width bars); ← fits the page again.
+    await tester.sendKeyEvent(LogicalKeyboardKey.f11);
+    await settle();
+    expect(c.currentZoom, greaterThan(fit * 1.05));
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
+    await settle();
+    expect(c.pageNumber, 2);
+    expect(c.currentZoom, closeTo(fit, 0.01));
+    await tester.sendKeyEvent(LogicalKeyboardKey.f11);
+    await settle();
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 10));
     await tester.runAsync(() => tmp.delete(recursive: true));
