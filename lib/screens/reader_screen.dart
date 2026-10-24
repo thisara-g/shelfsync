@@ -14,8 +14,17 @@ import '../sync/progress_record.dart';
 import 'common.dart';
 import 'reader_parts.dart';
 
-/// Native window controls (Linux runner): full screen.
+/// Native window controls (Linux runner): full screen and the title bar.
 const _windowChannel = MethodChannel('shelfsync/window');
+
+Future<void> _window(String method, bool value) async {
+  if (!Platform.isLinux) return;
+  try {
+    await _windowChannel.invokeMethod(method, value);
+  } on MissingPluginException {
+    // Not running in the ShelfSync runner (e.g. tests).
+  }
+}
 
 /// Colours of the desktop reader chrome, from the mockup.
 abstract final class _Chrome {
@@ -82,10 +91,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// without pointer activity on them or at the window edges.
   bool _bars = true;
   Timer? _barsTimer;
-  static const _barsDelay = Duration(seconds: 5);
+
+  /// The bars stay longer the first time, while the reader is new.
+  bool _barsHiddenOnce = false;
+  Duration get _barsDelay => _barsHiddenOnce ? const Duration(seconds: 3) : const Duration(seconds: 5);
 
   Size? _viewSize;
   Timer? _resizeTimer;
+  DateTime? _titleBarChangedAt;
 
   /// A zoom the user chose (buttons, keys, pinch, Ctrl+wheel). Page turns
   /// from ↑/↓ and window resizes keep it; ←/→ and layout changes fit the
@@ -162,7 +175,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _pageFieldFocus.dispose();
     _searchField.dispose();
     _searchFocus.dispose();
-    if (_fullscreen && Platform.isLinux) _windowChannel.invokeMethod('setFullscreen', false);
+    if (_fullscreen) _window('setFullscreen', false);
+    if (!_bars) _window('setTitleBarVisible', true);
     if (Platform.isAndroid) SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
@@ -382,6 +396,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final first = _viewSize == null;
     _viewSize = size;
     if (first || _layout == ReaderLayout.scroll) return;
+    // The title bar showing or hiding changes the height a little; keep the
+    // page where it is rather than refitting it every time.
+    final toggled = _titleBarChangedAt;
+    if (toggled != null && DateTime.now().difference(toggled) < const Duration(milliseconds: 600)) return;
     _resizeTimer?.cancel();
     _resizeTimer = Timer(const Duration(milliseconds: 150), () {
       if (mounted && _viewerReady) _frame(_page ?? 1);
@@ -501,8 +519,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     setState(() {
       _searching = true;
       _chrome = true;
-      _bars = true;
     });
+    _setBars(true);
     _searchFocus.requestFocus();
     _searchField.selection = TextSelection(baseOffset: 0, extentOffset: _searchField.text.length);
   }
@@ -551,7 +569,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final on = !_fullscreen;
     setState(() => _fullscreen = on);
     if (Platform.isLinux) {
-      await _windowChannel.invokeMethod('setFullscreen', on);
+      await _window('setFullscreen', on);
     } else {
       _setChrome(!on);
     }
@@ -565,8 +583,23 @@ class _ReaderScreenState extends State<ReaderScreen> {
   // --- Desktop bars ---------------------------------------------------------
 
   void _showBars() {
-    if (!_bars) setState(() => _bars = true);
+    _setBars(true);
     _scheduleBarsHide();
+  }
+
+  /// Shows or hides the toolbar and footer, and with them the window's title
+  /// bar, so a hidden toolbar leaves only the page.
+  void _setBars(bool visible) {
+    if (_bars == visible) return;
+    setState(() => _bars = visible);
+    _setTitleBar(visible);
+  }
+
+  void _setTitleBar(bool visible) {
+    if (!Platform.isLinux) return;
+    // The window gets taller or shorter; don't treat that as a resize to refit.
+    _titleBarChangedAt = DateTime.now();
+    _window('setTitleBarVisible', visible);
   }
 
   /// Hides the toolbar and footer after [_barsDelay] without activity. While
@@ -577,7 +610,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _barsTimer = Timer(_barsDelay, () {
       if (!mounted) return;
       if (_searching || _pageFieldFocus.hasFocus) return _scheduleBarsHide();
-      setState(() => _bars = false);
+      _barsHiddenOnce = true;
+      _setBars(false);
     });
   }
 
@@ -1375,7 +1409,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
       body: MouseRegion(
         onHover: (event) {
           final height = MediaQuery.sizeOf(context).height;
-          if (event.localPosition.dy < 80 || event.localPosition.dy > height - 60) _showBars();
+          // Near the top or bottom edge (the toolbar's own height, or less).
+          if (event.localPosition.dy < 40 || event.localPosition.dy > height - 32) _showBars();
         },
         child: Stack(
           children: [
