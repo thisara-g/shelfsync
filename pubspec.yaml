@@ -75,6 +75,29 @@ flutter:
   assets:
     - config/
     - assets/icons/shelfsync.png
+    - assets/fonts/Figtree-OFL.txt
+    - assets/fonts/Literata-OFL.txt
+
+  # Figtree (interface) and Literata (headings, book titles), SIL OFL 1.1.
+  fonts:
+    - family: Figtree
+      fonts:
+        - asset: assets/fonts/Figtree-Regular.ttf
+        - asset: assets/fonts/Figtree-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Figtree-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Figtree-Bold.ttf
+          weight: 700
+    - family: Literata
+      fonts:
+        - asset: assets/fonts/Literata-Regular.ttf
+        - asset: assets/fonts/Literata-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Literata-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Literata-Bold.ttf
+          weight: 700
 
   # To add assets to your application, add an assets section, like this:
   # assets:

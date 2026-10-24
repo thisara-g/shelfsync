@@ -1,8 +1,11 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'screens/common.dart';
 import 'screens/library_screen.dart';
 import 'screens/welcome_screen.dart';
 import 'services/library_store.dart';
@@ -13,6 +16,11 @@ import 'sync/sync_controller.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  LicenseRegistry.addLicense(() async* {
+    for (final font in ['Figtree', 'Literata']) {
+      yield LicenseEntryWithLineBreaks([font], await rootBundle.loadString('assets/fonts/$font-OFL.txt'));
+    }
+  });
   final supportDir = Directory((await getApplicationSupportDirectory()).path);
   final store = LibraryStore(supportDir);
   await store.load();
@@ -34,12 +42,10 @@ class ShelfSyncApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const seed = Color(0xFF00897B);
     return MaterialApp(
       title: 'ShelfSync',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(colorSchemeSeed: seed),
-      darkTheme: ThemeData(colorSchemeSeed: seed, brightness: Brightness.dark),
+      theme: shelfSyncTheme(),
       home: _SyncOnResume(
         librarySync: librarySync,
         child: ListenableBuilder(

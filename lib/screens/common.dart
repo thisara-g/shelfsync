@@ -4,9 +4,66 @@ import 'package:flutter/material.dart';
 
 import '../models/book.dart';
 
-/// Serif family for book titles and headings; resolves to the platform's
-/// serif font (Noto Serif on Android, DejaVu/Noto Serif on Linux).
-const serifFamily = 'serif';
+/// Serif family for headings and book titles (bundled).
+const serifFamily = 'Literata';
+
+/// Interface font (bundled).
+const uiFamily = 'Figtree';
+
+/// The ShelfSync look: warm paper background, white cards, teal accent.
+ThemeData shelfSyncTheme() {
+  const accent = Color(0xFF00897B);
+  final scheme = ColorScheme.fromSeed(seedColor: accent).copyWith(
+    primary: accent,
+    onPrimary: Colors.white,
+    primaryContainer: const Color(0xFFE0F2F1),
+    onPrimaryContainer: const Color(0xFF00695C),
+    secondaryContainer: const Color(0xFFE0F2F1),
+    onSecondaryContainer: const Color(0xFF00695C),
+    surface: Colors.white,
+    onSurface: const Color(0xFF1D2321),
+    onSurfaceVariant: const Color(0xFF5B6764),
+    surfaceContainerLowest: Colors.white,
+    surfaceContainerLow: const Color(0xFFF9F8F5),
+    surfaceContainer: const Color(0xFFF1F0EC),
+    surfaceContainerHigh: const Color(0xFFEAE8E2),
+    surfaceContainerHighest: const Color(0xFFE6EBE9),
+    outline: const Color(0xFFC9D1CE),
+    outlineVariant: const Color(0xFFDDE2E0),
+    inverseSurface: const Color(0xFF1D2321),
+    onInverseSurface: Colors.white,
+  );
+  return ThemeData(
+    colorScheme: scheme,
+    fontFamily: uiFamily,
+    scaffoldBackgroundColor: const Color(0xFFF6F5F1),
+    searchBarTheme: const SearchBarThemeData(
+      backgroundColor: WidgetStatePropertyAll(Color(0xFFEAE8E2)),
+      hintStyle: WidgetStatePropertyAll(TextStyle(fontSize: 17, color: Color(0xFF5B6764))),
+      textStyle: WidgetStatePropertyAll(TextStyle(fontSize: 17)),
+    ),
+  );
+}
+
+/// Dark chrome around the desktop reader (toolbar, side panel, footer).
+ThemeData readerChromeTheme() {
+  const accent = Color(0xFF4DB6AC);
+  final scheme = ColorScheme.fromSeed(seedColor: const Color(0xFF00897B), brightness: Brightness.dark).copyWith(
+    primary: accent,
+    onPrimary: const Color(0xFF00201C),
+    secondaryContainer: const Color(0xFF1F3B38),
+    onSecondaryContainer: const Color(0xFF80CBC4),
+    surface: const Color(0xFF101416),
+    onSurface: const Color(0xFFECF1EF),
+    onSurfaceVariant: const Color(0xFFA9B8B4),
+    surfaceContainerLow: const Color(0xFF151B1E),
+    surfaceContainer: const Color(0xFF182024),
+    surfaceContainerHigh: const Color(0xFF202A2E),
+    surfaceContainerHighest: const Color(0xFF37474F),
+    outlineVariant: const Color(0xFF263238),
+  );
+  return ThemeData(colorScheme: scheme, fontFamily: uiFamily, scaffoldBackgroundColor: const Color(0xFF101416));
+}
 
 /// Desktop layout: sidebar, toolbar and keyboard-first controls. Used on
 /// desktop platforms unless the window is narrow, where the touch layout fits

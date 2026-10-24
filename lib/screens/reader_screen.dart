@@ -622,7 +622,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   // --- Desktop layout ---------------------------------------------------------
 
-  Widget _desktopLayout(BuildContext context, ResumeOffer? offer) {
+  Widget _desktopLayout(BuildContext context, ResumeOffer? offer) =>
+      Theme(data: readerChromeTheme(), child: Builder(builder: (context) => _desktopChrome(context, offer)));
+
+  Widget _desktopChrome(BuildContext context, ResumeOffer? offer) {
     final theme = Theme.of(context);
     final page = _page ?? _book.lastPage;
     final count = _pageCount;
