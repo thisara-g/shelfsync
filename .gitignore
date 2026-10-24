@@ -51,3 +51,6 @@ app.*.map.json
 /config/google_oauth.json
 # ./setup answers (includes the desktop client secret)
 /.setup-state
+
+# Release files built by tool/release.sh
+/dist/
