@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:url_launcher/url_launcher.dart';
 
 import 'oauth_config.dart';
+import 'signed_in_page.dart';
 
 /// Non-sensitive scopes: files this app created, plus the hidden app-data folder.
 const driveScopes = [DriveApi.driveFileScope, DriveApi.driveAppdataScope];
@@ -77,9 +78,12 @@ class DesktopGoogleAuth implements GoogleAuth {
   @override
   Future<http.Client> signIn() async {
     if (!isConfigured) throw StateError('Google OAuth is not configured. Run ./setup first.');
-    final client = await clientViaUserConsent(_clientId, driveScopes, (url) {
-      launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-    });
+    final client = await clientViaUserConsent(
+      _clientId,
+      driveScopes,
+      (url) => launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication),
+      customPostAuthPage: signedInPage,
+    );
     if (client.credentials.refreshToken == null) {
       // Google only issues a refresh token on first consent; revoke the stale
       // grant so the next attempt gets a fresh one.
