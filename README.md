@@ -16,6 +16,12 @@ PC offers to jump there.
   keep their real colours.
 - **Offline first.** Reading works without a connection. Sync catches up later.
 
+**Download:** [home page](https://thisara-g.github.io/shelfsync/) ·
+[latest release](https://github.com/thisara-g/shelfsync/releases/latest) ·
+[privacy policy](https://thisara-g.github.io/shelfsync/privacy.html)
+
+The rest of this README is for building ShelfSync yourself.
+
 ## Setup
 
 You need a Linux PC (Ubuntu/Debian) to build from, and optionally an Android
@@ -89,9 +95,10 @@ that app when Android asks.
   doesn't create a duplicate, and two copies of the same PDF are stored once.
 - **Switching Google accounts** unlinks your books from the old Drive. Nothing
   gets deleted locally, and the books upload to the new account.
-- **The APK is signed with your build machine's debug key.** That's fine for
-  personal use. To install a build from a different computer over an existing
-  one, uninstall the old app first. That computer also needs its own Android
+- **Your own builds are signed with your machine's debug key** (unless you
+  create `android/key.properties`). That's fine for personal use. Android
+  won't install it over the official release or a build from another computer,
+  so uninstall the old app first. Each build machine needs its own Android
   OAuth client (run `./setup` there).
 
 ## Troubleshooting
@@ -128,6 +135,7 @@ lib/
   sync/drive_service.dart      Drive v3 calls: folder, books, progress records
   sync/library_sync.dart       the sync engine: books + reading positions
   sync/progress_record.dart    appDataFolder record format
+docs/                          home page and privacy policy (GitHub Pages)
 setup                          guided setup script
 ```
 
@@ -138,3 +146,12 @@ Reading-position records are stored as `progress-<sha256>.json` in Drive's
 { "book_id": "<sha256>", "page": 214, "percent": 0.38, "offset_x": 0.0, "offset_y": 0.42,
   "device": "ubuntu-pc", "device_id": "<random>", "updated": 1793212345 }
 ```
+
+## License
+
+ShelfSync is free software under the [GNU General Public License v3.0](LICENSE).
+You may use, study, change and share it. If you distribute a modified version,
+it must also be under GPL-3.0 with its source available.
+
+The ShelfSync name and icon identify the official app and aren't covered by the
+license. Please use a different name and icon for your own fork.

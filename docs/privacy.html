@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ShelfSync Privacy Policy</title>
+  <link rel="icon" href="icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header>
+    <img src="icon.png" alt="">
+    <h1>Privacy policy</h1>
+  </header>
+  <p class="lead">Last updated 24 October 2026</p>
+
+  <p>ShelfSync is a book reader for Linux and Android. This policy explains what data it uses. In short, your data stays on your devices and in your own Google Drive, and the developer never receives any of it.</p>
+
+  <h2>No ShelfSync servers</h2>
+  <p>ShelfSync has no backend. The app talks directly from your device to Google's APIs. The developer does not run any server that receives, stores or processes your books, your reading activity or your Google account data.</p>
+
+  <h2>Google account and Drive access</h2>
+  <p>When you sign in with Google, ShelfSync asks for two limited permissions:</p>
+  <ul>
+    <li><strong>See, edit, create and delete only the specific Google Drive files you use with this app</strong> (<code>drive.file</code>). ShelfSync uses this to create a <code>ShelfSync</code> folder and to upload, list, download and delete the books you add through the app. It cannot see any other files in your Drive.</li>
+    <li><strong>See, create and delete its own configuration data in your Google Drive</strong> (<code>drive.appdata</code>). ShelfSync stores small reading-position records here (book identifier, page, position on the page, device name and timestamp) so your devices can resume where you left off. This hidden folder is visible only to ShelfSync.</li>
+  </ul>
+  <p>Google also tells the app your account's email address and name, which are shown in the app so you know which account is connected.</p>
+
+  <h2>Data stored on your device</h2>
+  <p>Downloaded books, cover thumbnails, your library list, reading positions, settings and the Google sign-in token are stored in the app's private data folder on each device. Uninstalling the app or using <em>Sign out</em> removes the token. Sign out also revokes the app's access to your Google account.</p>
+
+  <h2>Sharing</h2>
+  <p>ShelfSync does not sell, share or transfer your data to anyone. It contains no analytics, advertising or tracking, and does not collect crash reports.</p>
+
+  <h2>Google API Services User Data Policy</h2>
+  <p>ShelfSync's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements.</p>
+
+  <h2>Deleting your data</h2>
+  <ul>
+    <li><strong>Books:</strong> use <em>Delete everywhere</em> in the app, or delete the <code>ShelfSync</code> folder in Google Drive.</li>
+    <li><strong>Reading positions:</strong> in Google Drive, open Settings → Manage apps → ShelfSync → <em>Delete hidden app data</em>.</li>
+    <li><strong>Access:</strong> remove ShelfSync at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</li>
+  </ul>
+
+  <h2>Changes and contact</h2>
+  <p>If this policy changes, the new version will be posted on this page. Questions can be asked by opening an issue at <a href="https://github.com/thisara-g/shelfsync/issues">github.com/thisara-g/shelfsync</a>.</p>
+
+  <footer><a href="index.html">← ShelfSync home</a></footer>
+</main>
+</body>
+</html>

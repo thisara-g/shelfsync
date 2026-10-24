@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ShelfSync</title>
+  <meta name="description" content="A PDF reader for Linux and Android that syncs your books and reading position through your own Google Drive.">
+  <link rel="icon" href="icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header>
+    <img src="icon.png" alt="">
+    <h1>ShelfSync</h1>
+  </header>
+  <p class="lead">A PDF reader for Linux and Android tablets. Your books and your place in them stay in sync through your own Google Drive.</p>
+
+  <div class="downloads">
+    <a href="https://github.com/thisara-g/shelfsync/releases/latest">
+      <strong>Linux (.deb)</strong>
+      <span>Ubuntu, Debian and derivatives</span>
+    </a>
+    <a href="https://github.com/thisara-g/shelfsync/releases/latest">
+      <strong>Android (.apk)</strong>
+      <span>Phones and tablets</span>
+    </a>
+  </div>
+
+  <h2>What it does</h2>
+  <ul>
+    <li>Add a book on one device and it appears on the other.</li>
+    <li>Resumes exactly where you left off: page, position on the page and zoom. If another device read further, it asks before jumping.</li>
+    <li>Dark pages that invert text but keep photos and diagrams in their real colours.</li>
+    <li>Works offline. Sync catches up when you're back online.</li>
+    <li>No accounts, no servers, no cost. Everything is stored in your own Google Drive.</li>
+  </ul>
+
+  <h2>Install</h2>
+  <p><strong>Linux:</strong> download the <code>.deb</code> and run:</p>
+  <pre>sudo apt install ./shelfsync_*.deb</pre>
+  <p><strong>Android:</strong> download the <code>.apk</code> on the tablet and open it. Allow installs from your browser or file manager when Android asks.</p>
+  <p>Then open ShelfSync, tap <strong>Sign in</strong> and use the same Google account on every device. A <code>ShelfSync</code> folder appears in your Drive.</p>
+
+  <h2>Privacy</h2>
+  <p>ShelfSync can only see the files it created itself. It cannot read the rest of your Drive, and there is no ShelfSync server. See the <a href="privacy.html">privacy policy</a>.</p>
+
+  <footer>
+    <a href="privacy.html">Privacy policy</a> ·
+    <a href="https://github.com/thisara-g/shelfsync">Source code</a> (GPL-3.0) ·
+    <a href="https://github.com/thisara-g/shelfsync/issues">Contact and support</a>
+  </footer>
+</main>
+</body>
+</html>
