@@ -13,28 +13,19 @@ struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
   FlMethodChannel* window_channel;
-  GtkWidget* header_bar;  // null when using a traditional title bar
 };
 
-// "shelfsync/window": setFullscreen(bool) for the reader's F11, and
-// setTitleBarVisible(bool) so the title bar can auto-hide with the reader's
-// toolbar.
+// "shelfsync/window": setFullscreen(bool) for the reader's F11.
 static void window_method_cb(FlMethodChannel* channel, FlMethodCall* call, gpointer user_data) {
-  MyApplication* self = MY_APPLICATION(user_data);
-  GtkWindow* window = gtk_application_get_active_window(GTK_APPLICATION(self));
-  const gchar* method = fl_method_call_get_name(call);
-  FlValue* args = fl_method_call_get_args(call);
-  const gboolean on = args != nullptr && fl_value_get_type(args) == FL_VALUE_TYPE_BOOL && fl_value_get_bool(args);
+  GtkWindow* window = GTK_WINDOW(user_data);
   g_autoptr(FlMethodResponse) response = nullptr;
-  if (strcmp(method, "setFullscreen") == 0 && window != nullptr) {
-    if (on) {
+  if (strcmp(fl_method_call_get_name(call), "setFullscreen") == 0) {
+    FlValue* args = fl_method_call_get_args(call);
+    if (args != nullptr && fl_value_get_type(args) == FL_VALUE_TYPE_BOOL && fl_value_get_bool(args)) {
       gtk_window_fullscreen(window);
     } else {
       gtk_window_unfullscreen(window);
     }
-    response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
-  } else if (strcmp(method, "setTitleBarVisible") == 0) {
-    if (self->header_bar != nullptr) gtk_widget_set_visible(self->header_bar, on);
     response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
   } else {
     response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
@@ -78,7 +69,6 @@ static void my_application_activate(GApplication* application) {
     gtk_header_bar_set_title(header_bar, "ShelfSync");
     gtk_header_bar_set_show_close_button(header_bar, TRUE);
     gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
-    self->header_bar = GTK_WIDGET(header_bar);
 
     // A slim title bar: the default GNOME header bar is ~46px tall.
     g_autoptr(GtkCssProvider) css = gtk_css_provider_new();
@@ -127,7 +117,7 @@ static void my_application_activate(GApplication* application) {
   g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
   self->window_channel = fl_method_channel_new(
       fl_engine_get_binary_messenger(fl_view_get_engine(view)), "shelfsync/window", FL_METHOD_CODEC(codec));
-  fl_method_channel_set_method_call_handler(self->window_channel, window_method_cb, self, nullptr);
+  fl_method_channel_set_method_call_handler(self->window_channel, window_method_cb, window, nullptr);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }

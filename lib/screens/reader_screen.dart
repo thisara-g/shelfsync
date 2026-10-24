@@ -14,8 +14,14 @@ import '../sync/progress_record.dart';
 import 'common.dart';
 import 'reader_parts.dart';
 
-/// Native window controls (Linux runner): full screen and the title bar.
+/// Native window controls (Linux runner): full screen.
 const _windowChannel = MethodChannel('shelfsync/window');
+
+/// Waits for a viewer animation, but no longer than [limit]: when the user
+/// scrolls or zooms mid-animation, pdfrx cancels it and its future never
+/// completes, which must not leave the reader half set up.
+Future<void> _settle(Future<void> animation, {Duration limit = const Duration(milliseconds: 500)}) =>
+    Future.any([animation, Future<void>.delayed(limit)]);
 
 Future<void> _window(String method, bool value) async {
   if (!Platform.isLinux) return;
@@ -98,7 +104,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Size? _viewSize;
   Timer? _resizeTimer;
-  DateTime? _titleBarChangedAt;
 
   /// A zoom the user chose (buttons, keys, pinch, Ctrl+wheel). Page turns
   /// from ↑/↓ and window resizes keep it; ←/→ and layout changes fit the
@@ -149,6 +154,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _store.addListener(_onStoreChanged);
     _sync.checkProgress(_book);
     _scheduleHide();
+    _scheduleBarsHide();
   }
 
   @override
@@ -176,7 +182,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _searchField.dispose();
     _searchFocus.dispose();
     if (_fullscreen) _window('setFullscreen', false);
-    if (!_bars) _window('setTitleBarVisible', true);
     if (Platform.isAndroid) SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
@@ -305,12 +310,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
       });
     });
     final restore = _layout == ReaderLayout.scroll ? _restoreExactPosition() : _frame(page);
-    restore.whenComplete(() {
+    _settle(restore, limit: const Duration(milliseconds: 700)).whenComplete(() {
       if (!mounted) return;
       _controller.addListener(_onViewChanged);
       _viewerReady = true;
       _onSyncChanged();
-      _scheduleBarsHide();
     });
   }
 
@@ -328,9 +332,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Future<void> _goToPosition(int page, Offset offset, {double? zoom}) async {
     if (page < 1 || page > _controller.pageCount) return;
     final pageRect = _controller.layout.pageLayouts[page - 1];
-    await _controller.goToPosition(
-      documentOffset: Offset(pageRect.left + offset.dx * pageRect.width, pageRect.top + offset.dy * pageRect.height),
-      zoom: zoom,
+    await _settle(
+      _controller.goToPosition(
+        documentOffset: Offset(pageRect.left + offset.dx * pageRect.width, pageRect.top + offset.dy * pageRect.height),
+        zoom: zoom,
+      ),
     );
   }
 
@@ -382,7 +388,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _framedZoom = zoom;
     _framing = true;
     try {
-      await _controller.goTo(_controller.calcMatrixFor(position, zoom: zoom, viewSize: view));
+      await _settle(_controller.goTo(_controller.calcMatrixFor(position, zoom: zoom, viewSize: view)));
     } finally {
       // pdfrx may clamp the zoom; remember what it actually applied.
       if (_controller.isReady) _framedZoom = _controller.currentZoom;
@@ -396,10 +402,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final first = _viewSize == null;
     _viewSize = size;
     if (first || _layout == ReaderLayout.scroll) return;
-    // The title bar showing or hiding changes the height a little; keep the
-    // page where it is rather than refitting it every time.
-    final toggled = _titleBarChangedAt;
-    if (toggled != null && DateTime.now().difference(toggled) < const Duration(milliseconds: 600)) return;
     _resizeTimer?.cancel();
     _resizeTimer = Timer(const Duration(milliseconds: 150), () {
       if (mounted && _viewerReady) _frame(_page ?? 1);
@@ -587,19 +589,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _scheduleBarsHide();
   }
 
-  /// Shows or hides the toolbar and footer, and with them the window's title
-  /// bar, so a hidden toolbar leaves only the page.
   void _setBars(bool visible) {
     if (_bars == visible) return;
     setState(() => _bars = visible);
-    _setTitleBar(visible);
-  }
-
-  void _setTitleBar(bool visible) {
-    if (!Platform.isLinux) return;
-    // The window gets taller or shorter; don't treat that as a resize to refit.
-    _titleBarChangedAt = DateTime.now();
-    _window('setTitleBarVisible', visible);
   }
 
   /// Hides the toolbar and footer after [_barsDelay] without activity. While

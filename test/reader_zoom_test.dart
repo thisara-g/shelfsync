@@ -138,4 +138,55 @@ void main() {
     await tester.pump(const Duration(seconds: 10));
     await tester.runAsync(() => tmp.delete(recursive: true));
   });
+
+  testWidgets('scrolling while the book opens still hides the bars and saves the position', (tester) async {
+    Pdfrx.pdfiumModulePath = File('build/native_assets/linux/libpdfium.so').absolute.path;
+    final tmp = await tester.runAsync(() => Directory.systemTemp.createTemp('z'));
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+      const MethodChannel('plugins.flutter.io/path_provider'),
+      (call) async => tmp!.path,
+    );
+    final store = LibraryStore(Directory(p.join(tmp!.path, 'lib')));
+    await tester.runAsync(() async {
+      await store.load();
+      await store.importFile('test/fixtures/sample.pdf');
+    });
+    final sync = SyncController(_NoAuth());
+    await tester.runAsync(sync.start);
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: shelfSyncTheme(),
+        home: ReaderScreen(
+          store: store,
+          librarySync: LibrarySync(store: store, sync: sync),
+          book: store.books.single,
+        ),
+      ),
+    );
+    // Keep wheel-scrolling from the start, so some scrolls land while the
+    // opening "fit the page" animation runs and cancel it.
+    for (var i = 0; i < 30; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 30)));
+      tester.binding.handlePointerEvent(
+        const PointerScrollEvent(
+          position: Offset(700, 450),
+          scrollDelta: Offset(0, 120),
+          kind: PointerDeviceKind.mouse,
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 30));
+    }
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(tester.getTopLeft(find.byTooltip('Zoom in (Ctrl+=)')).dy, lessThan(0), reason: 'bars hidden');
+    await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
+    expect(store.books.single.lastPage, greaterThan(1), reason: 'scrolled position saved');
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 10));
+    await tester.runAsync(() => tmp.delete(recursive: true));
+  });
 }
