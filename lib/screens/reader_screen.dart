@@ -78,10 +78,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
   bool _searching = false;
   bool _fullscreen = false;
 
-  /// Desktop: toolbar and footer showing (they auto-hide).
+  /// Desktop: toolbar and footer showing. They hide after a few seconds
+  /// without pointer activity on them or at the window edges.
   bool _bars = true;
-  bool _overBars = false;
   Timer? _barsTimer;
+  static const _barsDelay = Duration(seconds: 5);
 
   Size? _viewSize;
   Timer? _resizeTimer;
@@ -568,11 +569,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _scheduleBarsHide();
   }
 
-  /// Hides the toolbar and footer after a pause, unless they're in use.
+  /// Hides the toolbar and footer after [_barsDelay] without activity. While
+  /// the search bar is open or the page box is being typed in, checks again
+  /// later instead.
   void _scheduleBarsHide() {
     _barsTimer?.cancel();
-    _barsTimer = Timer(const Duration(seconds: 3), () {
-      if (!mounted || _overBars || _searching || _pageFieldFocus.hasFocus) return;
+    _barsTimer = Timer(_barsDelay, () {
+      if (!mounted) return;
+      if (_searching || _pageFieldFocus.hasFocus) return _scheduleBarsHide();
       setState(() => _bars = false);
     });
   }
@@ -581,7 +585,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   void _scheduleHide() {
     _hideTimer?.cancel();
-    _hideTimer = Timer(const Duration(seconds: 3), () {
+    _hideTimer = Timer(const Duration(seconds: 5), () {
       if (mounted && !_desktop && _offeredJump == null && !_searching) _setChrome(false);
     });
   }
@@ -1382,11 +1386,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
               right: 0,
               top: _bars ? 0 : -160,
               child: MouseRegion(
-                onEnter: (_) => _overBars = true,
-                onExit: (_) {
-                  _overBars = false;
-                  _scheduleBarsHide();
-                },
+                // Moving over the bars counts as activity.
+                onHover: (_) => _scheduleBarsHide(),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -1403,11 +1404,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
               right: 0,
               bottom: _bars ? 0 : -60,
               child: MouseRegion(
-                onEnter: (_) => _overBars = true,
-                onExit: (_) {
-                  _overBars = false;
-                  _scheduleBarsHide();
-                },
+                // Moving over the bars counts as activity.
+                onHover: (_) => _scheduleBarsHide(),
                 child: footer,
               ),
             ),

@@ -117,7 +117,7 @@ void main() {
     final zoomIn = find.byTooltip('Zoom in (Ctrl+=)');
     expect(tester.getTopLeft(zoomIn).dy, greaterThanOrEqualTo(0), reason: 'shown at first');
 
-    await tester.pump(const Duration(seconds: 4));
+    await tester.pump(const Duration(seconds: 6));
     await tester.pump(const Duration(milliseconds: 300));
     expect(tester.getTopLeft(zoomIn).dy, lessThan(0), reason: 'hidden after a pause');
 
@@ -127,6 +127,11 @@ void main() {
     await tester.pump(); // starts the slide-in
     await tester.pump(const Duration(milliseconds: 300));
     expect(tester.getTopLeft(zoomIn).dy, greaterThanOrEqualTo(0), reason: 'back at the top edge');
+
+    // Even with the pointer resting on the toolbar, it hides once idle.
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(tester.getTopLeft(zoomIn).dy, lessThan(0), reason: 'hidden when the pointer is idle');
     await mouse.removePointer();
 
     await tester.pumpWidget(const SizedBox());
