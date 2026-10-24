@@ -11,6 +11,7 @@ import 'package:shelfsync/models/shelf.dart';
 import 'package:shelfsync/screens/common.dart';
 import 'package:shelfsync/screens/library_screen.dart';
 import 'package:shelfsync/services/library_store.dart';
+import 'package:shelfsync/sync/drive_service.dart';
 import 'package:shelfsync/sync/google_auth.dart';
 import 'package:shelfsync/sync/library_sync.dart';
 import 'package:shelfsync/sync/sync_controller.dart';
@@ -26,8 +27,31 @@ class _NoAuth implements GoogleAuth {
   Future<void> signOut() async {}
 }
 
+class _SignedInAuth implements GoogleAuth {
+  @override
+  bool get isConfigured => true;
+  @override
+  Future<http.Client?> restore() async => http.Client();
+  @override
+  Future<http.Client> signIn() async => http.Client();
+  @override
+  Future<void> signOut() async {}
+}
+
+/// Just enough of Drive to be signed in as "Reader".
+class _FakeDrive implements DriveService {
+  @override
+  http.Client get client => http.Client();
+  @override
+  Future<DriveAccount> account() async => const DriveAccount(email: 'reader@example.com', displayName: 'Reader');
+  @override
+  Future<String> ensureLibraryFolder() async => 'folder-1';
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError('$invocation');
+}
+
 /// The desktop library with two books, on a Linux-sized window.
-Future<LibraryStore> _pumpLibrary(WidgetTester tester) async {
+Future<LibraryStore> _pumpLibrary(WidgetTester tester, {bool signedIn = false}) async {
   Pdfrx.pdfiumModulePath = File('build/native_assets/linux/libpdfium.so').absolute.path;
   final tmp = await tester.runAsync(() => Directory.systemTemp.createTemp('shelves'));
   TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
@@ -40,7 +64,9 @@ Future<LibraryStore> _pumpLibrary(WidgetTester tester) async {
     await store.importFile('test/fixtures/sample.pdf');
     await store.importFile('test/fixtures/six_pages.pdf');
   });
-  final sync = SyncController(_NoAuth());
+  final sync = signedIn
+      ? SyncController(_SignedInAuth(), driveFactory: (_) => _FakeDrive())
+      : SyncController(_NoAuth());
   await tester.runAsync(sync.start);
   tester.view.physicalSize = const Size(1400, 900);
   tester.view.devicePixelRatio = 1;
@@ -331,5 +357,70 @@ void main() {
     );
     expect(titleBox.width, closeTo(buttonBox.width, 2.5));
     expect(find.text('SORT BY'), findsNothing);
+  });
+
+  testWidgets('account panel opens above the sidebar card with account, Drive use and devices', (tester) async {
+    final store = await _pumpLibrary(tester, signedIn: true);
+    final book = store.books.first;
+    await tester.runAsync(() async {
+      await store.setDriveFileId(book.id, 'file-1');
+      await store.applyRemoteProgress(
+        book.id,
+        page: 2,
+        pageOffset: null,
+        updatedAt: DateTime.now().subtract(const Duration(hours: 2)),
+        device: 'Galaxy Tab',
+      );
+    });
+    await _settle(tester);
+
+    final card = tester.getRect(find.ancestor(of: find.text('Reader'), matching: find.byType(InkWell)).first);
+    await tester.tap(find.text('Reader'));
+    await _settle(tester);
+
+    expect(find.text('reader@example.com'), findsOneWidget);
+    expect(find.textContaining('Synced'), findsWidgets);
+    expect(find.textContaining('1 book · '), findsOneWidget);
+    expect(find.textContaining('in your Google Drive'), findsOneWidget);
+    expect(find.text('Sync now'), findsOneWidget);
+    expect(find.text('Open in Drive'), findsOneWidget);
+    expect(find.byIcon(Icons.north_east_rounded), findsOneWidget);
+    expect(find.text('YOUR DEVICES'), findsOneWidget);
+    expect(find.text('This PC'), findsOneWidget);
+    expect(find.text('Galaxy Tab'), findsOneWidget);
+    expect(find.text('Read ${book.title} · ${timeAgo(book.progressUpdatedAt!)}'), findsOneWidget);
+    expect(find.text('Signing out keeps your books on this PC and in Drive.'), findsOneWidget);
+
+    // Same left edge as the card, 16px above it, 360 wide.
+    final panel = tester.getRect(
+      find.ancestor(of: find.text('reader@example.com'), matching: find.byType(Material)).first,
+    );
+    expect(panel.left, card.left);
+    expect(panel.bottom, closeTo(card.top - 16, 0.5));
+    expect(panel.width, 360);
+
+    // A click outside closes it.
+    await tester.tapAt(const Offset(900, 450));
+    await _settle(tester);
+    expect(find.text('YOUR DEVICES'), findsNothing);
+
+    // Sign out closes the panel and signs out.
+    await tester.tap(find.text('Reader'));
+    await _settle(tester);
+    await tester.tap(find.text('Sign out'));
+    await _settle(tester);
+    expect(find.text('YOUR DEVICES'), findsNothing);
+    expect(find.text('Sign in to sync'), findsOneWidget);
+  });
+
+  testWidgets('without a Google client the account panel says sync is not set up', (tester) async {
+    await _pumpLibrary(tester);
+    await tester.tap(find.text('Sync not set up'));
+    await _settle(tester);
+    expect(find.text('Google Drive sync is not set up'), findsOneWidget);
+    expect(find.text('Sign out'), findsNothing);
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await _settle(tester);
+    expect(find.text('Google Drive sync is not set up'), findsNothing);
   });
 }
