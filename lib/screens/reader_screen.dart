@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -77,8 +78,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
   bool _searching = false;
   bool _fullscreen = false;
 
-  /// Scroll-mode zoom before entering full screen, restored on leaving it.
-  double? _zoomBeforeFullscreen;
   Size? _viewSize;
   Timer? _resizeTimer;
 
@@ -98,7 +97,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
   LibraryStore get _store => widget.store;
   Book get _book => widget.book;
   bool _desktop = false;
-  ReaderLayout get _layout => _desktop ? _store.readerLayout : ReaderLayout.scroll;
+
+  /// Desktop shows Single or Two pages; the touch layout scrolls continuously.
+  ReaderLayout get _layout => !_desktop
+      ? ReaderLayout.scroll
+      : (_store.readerLayout == ReaderLayout.spread ? ReaderLayout.spread : ReaderLayout.single);
   bool get _spread => _layout == ReaderLayout.spread;
 
   @override
@@ -314,8 +317,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   /// Zooms to frame [page]; if it's then taller than the window, shows its
-  /// top (or keeps the current vertical position with [keepY]).
-  Future<void> _frame(int page, {bool keepY = false}) async {
+  /// top (its bottom with [showBottom], or the current height with [keepY]).
+  Future<void> _frame(int page, {bool keepY = false, bool showBottom = false}) async {
     if (!_controller.isReady || page < 1 || page > _controller.pageCount) return;
     final rect = _frameRect(page);
     final view = _controller.viewSize;
@@ -326,6 +329,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
       position = rect.center;
     } else if (keepY) {
       position = Offset(rect.center.dx, _controller.visibleRect.center.dy);
+    } else if (showBottom) {
+      position = rect.bottomCenter.translate(0, -(view.height / 2 - margin) / zoom);
     } else {
       position = rect.topCenter.translate(0, (view.height / 2 - margin) / zoom);
     }
@@ -346,7 +351,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Future<void> _goToPage(int page) => _showPage(page);
 
-  void _step(int direction) {
+  void _step(int direction, {bool showBottom = false}) {
     final page = _page;
     final count = _pageCount;
     if (page == null || count == null) return;
@@ -358,7 +363,38 @@ class _ReaderScreenState extends State<ReaderScreen> {
       target = page + direction;
     }
     target = target.clamp(1, count);
-    if (target != page) _showPage(target);
+    if (target == page) return;
+    if (_layout == ReaderLayout.scroll) {
+      _showPage(target);
+    } else {
+      _frame(target, showBottom: showBottom);
+    }
+  }
+
+  /// ↑ / ↓: scrolls through the page; at its bottom (top) moves on to the next
+  /// page (the bottom of the previous one).
+  void _scrollStep(int direction) {
+    if (!_controller.isReady) return;
+    final visible = _controller.visibleRect;
+    final step = visible.height * 0.15;
+    var centerY = visible.center.dy + direction * step;
+    if (_layout != ReaderLayout.scroll) {
+      final page = _page;
+      if (page == null) return;
+      final rect = _frameRect(page);
+      final edge = _controller.params.margin / _controller.currentZoom;
+      if (direction > 0) {
+        if (visible.bottom >= rect.bottom - 1) return _step(1);
+        centerY = math.min(centerY, rect.bottom + edge - visible.height / 2);
+      } else {
+        if (visible.top <= rect.top + 1) return _step(-1, showBottom: true);
+        centerY = math.max(centerY, rect.top - edge + visible.height / 2);
+      }
+    }
+    _controller.goTo(
+      _controller.calcMatrixFor(Offset(visible.center.dx, centerY), zoom: _controller.currentZoom),
+      duration: const Duration(milliseconds: 120),
+    );
   }
 
   /// Zooms so the current page (or both facing pages) fill the width.
@@ -456,27 +492,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Future<void> _toggleFullscreen() async {
     final on = !_fullscreen;
-    if (on && _layout == ReaderLayout.scroll && _controller.isReady) _zoomBeforeFullscreen = _controller.currentZoom;
     setState(() => _fullscreen = on);
     if (Platform.isLinux) {
       await _windowChannel.invokeMethod('setFullscreen', on);
     } else {
       _setChrome(!on);
     }
-    // Wait for the window to settle at its new size, then reframe. (Single /
-    // Two pages also reframe on resize; Scroll only does here.)
+    // Reframe once the window has settled at its new size (resizes reframe
+    // too, but the full-screen zoom must follow the new mode either way).
     await Future<void>.delayed(const Duration(milliseconds: 400));
-    if (!mounted || !_controller.isReady) return;
-    final page = _page ?? 1;
-    if (_layout != ReaderLayout.scroll) {
-      await _frame(page);
-    } else if (on) {
-      await _frame(page, keepY: true);
-    } else {
-      final zoom = _zoomBeforeFullscreen;
-      _zoomBeforeFullscreen = null;
-      if (zoom != null) await _controller.setZoom(_controller.centerPosition, zoom);
-    }
+    if (!mounted || !_controller.isReady || _layout == ReaderLayout.scroll) return;
+    await _frame(_page ?? 1);
   }
 
   // --- Touch chrome -----------------------------------------------------------
@@ -650,6 +676,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
         onViewerReady: _onViewerReady,
         onPageChanged: _onPageChanged,
         onGeneralTap: _onTap,
+        // Keys are handled in _onKey, so ↑/↓ can continue onto the next page.
+        keyHandlerParams: const PdfViewerKeyHandlerParams(enabled: false),
       ),
     );
   }
@@ -666,6 +694,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   static const _shortcuts = [
     ('← → / PgUp PgDn', 'Previous / next page'),
+    ('↑ ↓', 'Scroll; past the edge, previous / next page'),
     ('Home / End', 'First / last page'),
     ('Ctrl+F', 'Search in book'),
     ('Ctrl+D', 'Bookmark this page'),
@@ -723,6 +752,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
       return KeyEventResult.ignored; // typing in the search or page box
     }
     final VoidCallback? action = switch (key) {
+      LogicalKeyboardKey.arrowDown => () => _scrollStep(1),
+      LogicalKeyboardKey.arrowUp => () => _scrollStep(-1),
       LogicalKeyboardKey.pageDown || LogicalKeyboardKey.arrowRight => () => _step(1),
       LogicalKeyboardKey.pageUp || LogicalKeyboardKey.arrowLeft => () => _step(-1),
       LogicalKeyboardKey.home => () => _goToPage(1),
@@ -1115,7 +1146,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     padding: const EdgeInsets.all(4),
                     children: [
                       for (final (layout, label, icon) in const [
-                        (ReaderLayout.scroll, 'Scroll', Icons.view_day_outlined),
                         (ReaderLayout.single, 'Single', Icons.crop_portrait),
                         (ReaderLayout.spread, 'Two pages', Icons.auto_stories_outlined),
                       ])
@@ -1123,7 +1153,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                           label: compact ? null : label,
                           icon: compact ? icon : null,
                           tooltip: label,
-                          selected: _store.readerLayout == layout,
+                          selected: _layout == layout,
                           onPressed: () => _setLayout(layout),
                         ),
                     ],

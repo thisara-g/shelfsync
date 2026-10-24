@@ -17,7 +17,9 @@ enum ImportResult { added, duplicate }
 /// How the reader colours pages.
 enum ReaderTheme { light, sepia, dark }
 
-/// How the desktop reader lays out pages.
+/// How the reader lays out pages. The desktop offers [single] and [spread];
+/// [scroll] (continuous) is the touch layout, and a stored [scroll] from older
+/// versions reads as [single] on the desktop.
 enum ReaderLayout { scroll, single, spread }
 
 /// Persists the library as `library.json` plus one `books/<id>.pdf` per book
@@ -34,7 +36,7 @@ class LibraryStore extends ChangeNotifier {
   ReaderTheme _readerTheme = ReaderTheme.light;
   bool _autoJump = false;
   bool _welcomeDone = false;
-  ReaderLayout _readerLayout = ReaderLayout.scroll;
+  ReaderLayout _readerLayout = ReaderLayout.single;
   String? _syncAccount;
   String _deviceId = '';
   String _deviceName = '';
@@ -122,7 +124,7 @@ class LibraryStore extends ChangeNotifier {
           (settings['darkReader'] == true ? ReaderTheme.dark : ReaderTheme.light);
       _autoJump = settings['autoJump'] as bool? ?? false;
       _readerLayout = ReaderLayout.values.asNameMap()[settings['readerLayout']] ??
-          (settings['twoPageSpread'] == true ? ReaderLayout.spread : ReaderLayout.scroll);
+          (settings['twoPageSpread'] == true ? ReaderLayout.spread : ReaderLayout.single);
       // Existing users (from 0.1) already know the app: skip the welcome.
       _welcomeDone = settings['welcomeDone'] as bool? ?? true;
       _syncAccount = settings['syncAccount'] as String?;

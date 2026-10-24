@@ -66,10 +66,11 @@ void main() {
       theme: shelfSyncTheme(),
       home: ReaderScreen(store: store, librarySync: librarySync, book: store.books.single),
     ));
-    // Let the PDF load (real PDFium, off the fake clock).
+    // Let the PDF load (real PDFium, off the fake clock) and the viewer's
+    // zoom animations run (on the fake clock).
     for (var i = 0; i < 20; i++) {
       await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
-      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
     }
   }
 
@@ -79,7 +80,16 @@ void main() {
       await openReader(tester, const Size(1400, 900));
       expect(tester.takeException(), isNull);
       expect(find.text('Two pages'), findsOneWidget);
+      expect(find.text('Scroll'), findsNothing);
       expect(find.text('of 3'), findsOneWidget);
+
+      // The sample page fits the window, so ↓ continues to the next page(s).
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      for (var i = 0; i < 5; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+        await tester.pump(const Duration(milliseconds: 300));
+      }
+      expect(find.widgetWithText(TextField, '1'), findsNothing, reason: 'moved past page 1');
 
       // Panel, search and bookmark all work once the document is loaded.
       await tester.tap(find.byTooltip('Show contents (Ctrl+B)'));
