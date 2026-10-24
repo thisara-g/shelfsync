@@ -69,6 +69,17 @@ static void my_application_activate(GApplication* application) {
     gtk_header_bar_set_title(header_bar, "ShelfSync");
     gtk_header_bar_set_show_close_button(header_bar, TRUE);
     gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
+
+    // A slim title bar: the default GNOME header bar is ~46px tall.
+    g_autoptr(GtkCssProvider) css = gtk_css_provider_new();
+    gtk_css_provider_load_from_data(css,
+        "headerbar { min-height: 0; padding: 0 6px; }"
+        "headerbar .title { font-size: 0.9em; }"
+        "headerbar button { min-height: 0; min-width: 0; padding: 2px; margin: 4px 0; }",
+        -1, nullptr);
+    gtk_style_context_add_provider_for_screen(gtk_widget_get_screen(GTK_WIDGET(window)),
+                                              GTK_STYLE_PROVIDER(css),
+                                              GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
   } else {
     gtk_window_set_title(window, "ShelfSync");
   }

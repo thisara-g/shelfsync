@@ -461,6 +461,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _focusNode.requestFocus();
   }
 
+  /// Page colours cycle Light → Dark → Sepia.
+  ReaderTheme get _nextTheme => switch (_store.readerTheme) {
+    ReaderTheme.light => ReaderTheme.dark,
+    ReaderTheme.dark => ReaderTheme.sepia,
+    ReaderTheme.sepia => ReaderTheme.light,
+  };
+
+  static String _themeName(ReaderTheme theme) => switch (theme) {
+    ReaderTheme.light => 'Light',
+    ReaderTheme.dark => 'Dark',
+    ReaderTheme.sepia => 'Sepia',
+  };
+
   Future<void> _setTheme(ReaderTheme theme) async {
     await _store.setReaderTheme(theme);
     if (mounted) setState(() {});
@@ -1193,19 +1206,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     active: _searching,
                     onPressed: _openSearch,
                   ),
-                  PopupMenuButton<ReaderTheme>(
-                    tooltip: 'Page colour',
-                    initialValue: _store.readerTheme,
-                    onSelected: _setTheme,
-                    itemBuilder: (_) => const [
-                      PopupMenuItem(value: ReaderTheme.light, child: Text('Light pages')),
-                      PopupMenuItem(value: ReaderTheme.sepia, child: Text('Sepia pages')),
-                      PopupMenuItem(value: ReaderTheme.dark, child: Text('Dark pages')),
-                    ],
-                    child: const SizedBox.square(
-                      dimension: 40,
-                      child: Icon(Icons.dark_mode_outlined, size: 20, color: _Chrome.text),
-                    ),
+                  _ChromeIcon(
+                    tooltip: 'Page colour: ${_themeName(_store.readerTheme)} (click for ${_themeName(_nextTheme)})',
+                    icon: switch (_store.readerTheme) {
+                      ReaderTheme.light => Icons.light_mode_outlined,
+                      ReaderTheme.dark => Icons.dark_mode_outlined,
+                      ReaderTheme.sepia => Icons.coffee_outlined,
+                    },
+                    onPressed: () => _setTheme(_nextTheme),
                   ),
                   _ChromeIcon(tooltip: 'Full screen (F11)', icon: Icons.fullscreen, onPressed: _toggleFullscreen),
                 ],
