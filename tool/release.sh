@@ -11,6 +11,7 @@
 # android/key.properties (the release signing key). Bump `version:` in
 # pubspec.yaml before each release; the part after + must always increase.
 set -euo pipefail
+umask 022
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO"
