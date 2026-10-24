@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/gestures.dart';
@@ -195,6 +196,70 @@ void main() {
     expect(tester.getTopLeft(find.byTooltip('Zoom in (Ctrl+=)')).dy, lessThan(0), reason: 'bars hidden');
     await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 200)));
     expect(store.books.single.lastPage, greaterThan(1), reason: 'scrolled position saved');
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 10));
+    await tester.runAsync(() => tmp.delete(recursive: true));
+  });
+
+  testWidgets('two pages: running on at a zoom keeps the horizontal position', (tester) async {
+    Pdfrx.pdfiumModulePath = File('build/native_assets/linux/libpdfium.so').absolute.path;
+    final tmp = await tester.runAsync(() => Directory.systemTemp.createTemp('z'));
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+      const MethodChannel('plugins.flutter.io/path_provider'),
+      (call) async => tmp!.path,
+    );
+    final store = LibraryStore(Directory(p.join(tmp!.path, 'lib')));
+    await tester.runAsync(() async {
+      await store.load();
+      await store.importFile('test/fixtures/six_pages.pdf');
+      await store.setReaderLayout(ReaderLayout.spread);
+    });
+    final sync = SyncController(_NoAuth());
+    await tester.runAsync(sync.start);
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: shelfSyncTheme(),
+        home: ReaderScreen(
+          store: store,
+          librarySync: LibrarySync(store: store, sync: sync),
+          book: store.books.single,
+        ),
+      ),
+    );
+    Future<void> settle() async {
+      for (var i = 0; i < 12; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 60)));
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    await settle();
+    final c = tester.widget<PdfViewer>(find.byType(PdfViewer)).controller!;
+    // Go to the pair 2–3 and zoom in on its left page.
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowRight);
+    await settle();
+    final pair = c.layout.pageLayouts[1].expandToInclude(c.layout.pageLayouts[2]);
+    await tester.tap(find.byTooltip('Zoom in (Ctrl+=)'));
+    await settle();
+    await tester.tap(find.byTooltip('Zoom in (Ctrl+=)'));
+    await settle();
+    unawaited(c.goTo(c.calcMatrixFor(Offset(pair.left + pair.width * 0.3, pair.top + 50), zoom: c.currentZoom)));
+    await settle();
+    final offset = c.visibleRect.center.dx - pair.left;
+    expect(c.visibleRect.center.dx, lessThan(pair.center.dx), reason: 'reading the left page');
+
+    // ↓ until the pair 4–5: still on the left side, not the middle.
+    for (var i = 0; i < 60 && c.pageNumber! < 4; i++) {
+      await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+      await settle();
+    }
+    expect(c.pageNumber, inInclusiveRange(4, 5));
+    final next = c.layout.pageLayouts[3].expandToInclude(c.layout.pageLayouts[4]);
+    expect(c.visibleRect.center.dx - next.left, closeTo(offset, 2), reason: 'same horizontal position');
 
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 10));

@@ -368,23 +368,40 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// Shows [page] at the user's zoom, or with [fit] (or no zoom chosen) zooms
   /// so it fits. If it's then taller than the window, shows its top (its
   /// bottom with [showBottom], or the current height with [keepY]).
-  Future<void> _frame(int page, {bool fit = false, bool keepY = false, bool showBottom = false}) async {
+  ///
+  /// [xOffset]: horizontal position of the view's centre from the left edge of
+  /// the previous page (or pair), so running on at a zoom wider than the
+  /// window stays on the same side instead of jumping to the middle.
+  Future<void> _frame(
+    int page, {
+    bool fit = false,
+    bool keepY = false,
+    bool showBottom = false,
+    double? xOffset,
+  }) async {
     if (!_controller.isReady || page < 1 || page > _controller.pageCount) return;
     if (fit) _userZoom = null;
     final rect = _frameRect(page);
     final view = _controller.viewSize;
     final margin = _controller.params.margin;
     final zoom = _userZoom ?? frameZoom(rect, view, margin);
-    final Offset position;
-    if (rect.height * zoom <= view.height - margin * 2 + 1) {
-      position = rect.center;
-    } else if (keepY) {
-      position = Offset(rect.center.dx, _controller.visibleRect.center.dy);
-    } else if (showBottom) {
-      position = rect.bottomCenter.translate(0, -(view.height / 2 - margin) / zoom);
-    } else {
-      position = rect.topCenter.translate(0, (view.height / 2 - margin) / zoom);
+    var x = rect.center.dx;
+    final halfWidth = (view.width / 2 - margin) / zoom;
+    if (xOffset != null && rect.width / 2 > halfWidth) {
+      x = (rect.left + xOffset).clamp(rect.left + halfWidth, rect.right - halfWidth);
     }
+    final halfHeight = (view.height / 2 - margin) / zoom;
+    final double y;
+    if (rect.height * zoom <= view.height - margin * 2 + 1) {
+      y = rect.center.dy;
+    } else if (keepY) {
+      y = _controller.visibleRect.center.dy;
+    } else if (showBottom) {
+      y = rect.bottom - halfHeight;
+    } else {
+      y = rect.top + halfHeight;
+    }
+    final position = Offset(x, y);
     _framedZoom = zoom;
     _framing = true;
     try {
@@ -424,11 +441,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
       target = page + direction;
     }
     target = target.clamp(1, count);
-    if (target == page) return;
+    if (target == page || (_spread && spreadRowStart(target) == spreadRowStart(page))) return;
     if (_layout == ReaderLayout.scroll) {
       _showPage(target);
     } else {
-      _frame(target, fit: fit, showBottom: showBottom);
+      final xOffset = fit ? null : _controller.visibleRect.center.dx - _frameRect(page).left;
+      _frame(target, fit: fit, showBottom: showBottom, xOffset: xOffset);
     }
   }
 
@@ -1267,10 +1285,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
           ),
           _ChromeIcon(
             tooltip: 'Page colour: ${_themeName(_store.readerTheme)} (click for ${_themeName(_nextTheme)})',
-            icon: switch (_store.readerTheme) {
-              ReaderTheme.light => Icons.light_mode_outlined,
+            // Shows the colour a click switches to.
+            icon: switch (_nextTheme) {
               ReaderTheme.dark => Icons.dark_mode_outlined,
               ReaderTheme.sepia => Icons.coffee_outlined,
+              ReaderTheme.light => Icons.light_mode_outlined,
             },
             onPressed: () => _setTheme(_nextTheme),
           ),
