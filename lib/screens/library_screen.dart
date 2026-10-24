@@ -287,6 +287,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
     );
   }
 
+  /// Del on a selected book: free the download, or remove a book that only
+  /// exists here (after confirming).
+  Future<void> _removeWithKey(Book book) async {
+    if (book.isLocal && book.driveFileId != null) {
+      await store.removeLocalCopy(book.id);
+      _snack('Download removed. "${book.title}" stays in Google Drive.');
+    } else if (book.isLocal) {
+      await _confirmDelete(book);
+    }
+  }
+
   // --- Shelves --------------------------------------------------------------
 
   Future<Shelf?> _newShelf() async {
@@ -428,6 +439,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
   static const _shortcuts = [
     ('Ctrl+O', 'Add PDFs'),
     ('Ctrl+K', 'Search'),
+    ('Tab / arrow keys', 'Select a book'),
+    ('Enter', 'Open the selected book'),
+    ('Del', 'Remove the selected book\'s download'),
     ('Right-click a book', 'Open, rename, shelves, remove'),
     ('Drag a book onto a shelf', 'Add it to the shelf'),
     ('Drop PDFs on the window', 'Add them to the library'),
@@ -449,10 +463,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
         const SingleActivator(LogicalKeyboardKey.keyO, control: true): _addBooks,
         const SingleActivator(LogicalKeyboardKey.keyK, control: true): _searchFocus.requestFocus,
         const SingleActivator(LogicalKeyboardKey.keyF, control: true): _searchFocus.requestFocus,
-        const CharacterActivator('?'): () => showShortcutsDialog(context, _shortcuts),
       },
       child: Focus(
         autofocus: true,
+        onKeyEvent: (_, event) => questionMarkOpens(event, () => showShortcutsDialog(context, _shortcuts)),
         child: !desktop
             ? body
             : DropTarget(
@@ -644,156 +658,164 @@ class _LibraryScreenState extends State<LibraryScreen> {
             account: SidebarAccount(sync: widget.sync, librarySync: librarySync),
           ),
           Expanded(
-            child: CustomScrollView(
-              slivers: [
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(40, 28, 40, 0),
-                  sliver: SliverList.list(
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              _heading,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontFamily: serifFamily,
-                                fontSize: 32,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Flexible(
-                            child: ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 320),
-                              child: SizedBox(
-                                height: 42,
-                                child: TextField(
-                                  controller: _search,
-                                  focusNode: _searchFocus,
-                                  style: const TextStyle(fontSize: 15),
-                                  decoration: InputDecoration(
-                                    hintText: 'Search books',
-                                    prefixIcon: const Icon(Icons.search, size: 18),
-                                    suffixIcon: _search.text.isEmpty
-                                        ? const Padding(padding: EdgeInsets.all(10), child: _Kbd('Ctrl K'))
-                                        : IconButton(
-                                            tooltip: 'Clear',
-                                            icon: const Icon(Icons.close, size: 18),
-                                            onPressed: _search.clear,
-                                          ),
-                                    isDense: true,
-                                    filled: true,
-                                    fillColor: theme.colorScheme.surface,
-                                    contentPadding: const EdgeInsets.symmetric(vertical: 10),
-                                    enabledBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(10),
-                                      borderSide: BorderSide(color: border),
-                                    ),
-                                    focusedBorder: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(10),
-                                      borderSide: BorderSide(color: theme.colorScheme.primary, width: 1.5),
+            child: Column(
+              children: [
+                Expanded(
+                  child: CustomScrollView(
+                    slivers: [
+                      SliverPadding(
+                        padding: const EdgeInsets.fromLTRB(40, 28, 40, 0),
+                        sliver: SliverList.list(
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    _heading,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontFamily: serifFamily,
+                                      fontSize: 32,
+                                      fontWeight: FontWeight.w600,
                                     ),
                                   ),
                                 ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          PopupMenuButton<LibrarySort>(
-                            tooltip: 'Sort',
-                            initialValue: _sort,
-                            onSelected: (s) => setState(() => _sort = s),
-                            itemBuilder: (_) => [
-                              for (final s in LibrarySort.values) PopupMenuItem(value: s, child: Text(s.label)),
-                            ],
-                            child: Container(
-                              height: 42,
-                              padding: const EdgeInsets.only(left: 14, right: 8),
-                              decoration: BoxDecoration(
-                                color: theme.colorScheme.surface,
-                                border: Border.all(color: border),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text('Sort: ${_sort.label}', style: const TextStyle(fontSize: 15)),
-                                  const Icon(Icons.arrow_drop_down),
-                                ],
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          SizedBox(
-                            height: 42,
-                            child: FilledButton.icon(
-                              style: FilledButton.styleFrom(
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                                textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-                              ),
-                              onPressed: _addBooks,
-                              icon: const Icon(Icons.add, size: 20),
-                              label: const Text('Add PDF'),
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (current.isNotEmpty) ...[
-                        const SizedBox(height: 30),
-                        const _SectionLabel('Continue reading'),
-                        const SizedBox(height: 14),
-                        LayoutBuilder(
-                          builder: (context, constraints) {
-                            // Like CSS auto-fit: as many 300px+ columns as fit, at most
-                            // one per book, sharing the full width.
-                            final fit = ((constraints.maxWidth + 16) / 316).floor().clamp(1, 3);
-                            final columns = fit < current.length ? fit : current.length;
-                            final shown = current.take(columns).toList();
-                            return Row(
-                              children: [
-                                for (var i = 0; i < columns; i++) ...[
-                                  if (i > 0) const SizedBox(width: 16),
-                                  Expanded(
-                                    child: i < shown.length
-                                        ? _ContinueCard(
-                                            book: shown[i],
-                                            cover: _covers.coverFor(shown[i]),
-                                            onOpen: () => _open(shown[i]),
-                                          )
-                                        : const SizedBox(),
+                                const SizedBox(width: 16),
+                                Flexible(
+                                  child: ConstrainedBox(
+                                    constraints: const BoxConstraints(maxWidth: 320),
+                                    child: SizedBox(
+                                      height: 42,
+                                      child: TextField(
+                                        controller: _search,
+                                        focusNode: _searchFocus,
+                                        style: const TextStyle(fontSize: 15),
+                                        decoration: InputDecoration(
+                                          hintText: 'Search books',
+                                          prefixIcon: const Icon(Icons.search, size: 18),
+                                          suffixIcon: _search.text.isEmpty
+                                              ? const Padding(padding: EdgeInsets.all(10), child: _Kbd('Ctrl K'))
+                                              : IconButton(
+                                                  tooltip: 'Clear',
+                                                  icon: const Icon(Icons.close, size: 18),
+                                                  onPressed: _search.clear,
+                                                ),
+                                          isDense: true,
+                                          filled: true,
+                                          fillColor: theme.colorScheme.surface,
+                                          contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                                          enabledBorder: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(10),
+                                            borderSide: BorderSide(color: border),
+                                          ),
+                                          focusedBorder: OutlineInputBorder(
+                                            borderRadius: BorderRadius.circular(10),
+                                            borderSide: BorderSide(color: theme.colorScheme.primary, width: 1.5),
+                                          ),
+                                        ),
+                                      ),
+                                    ),
                                   ),
-                                ],
+                                ),
+                                const SizedBox(width: 12),
+                                PopupMenuButton<LibrarySort>(
+                                  tooltip: 'Sort',
+                                  initialValue: _sort,
+                                  onSelected: (s) => setState(() => _sort = s),
+                                  itemBuilder: (_) => [
+                                    for (final s in LibrarySort.values) PopupMenuItem(value: s, child: Text(s.label)),
+                                  ],
+                                  child: Container(
+                                    height: 42,
+                                    padding: const EdgeInsets.only(left: 14, right: 8),
+                                    decoration: BoxDecoration(
+                                      color: theme.colorScheme.surface,
+                                      border: Border.all(color: border),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text('Sort: ${_sort.label}', style: const TextStyle(fontSize: 15)),
+                                        const Icon(Icons.arrow_drop_down),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                SizedBox(
+                                  height: 42,
+                                  child: FilledButton.icon(
+                                    style: FilledButton.styleFrom(
+                                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                      textStyle: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                                    ),
+                                    onPressed: _addBooks,
+                                    icon: const Icon(Icons.add, size: 20),
+                                    label: const Text('Add PDF'),
+                                  ),
+                                ),
                               ],
-                            );
-                          },
+                            ),
+                            if (current.isNotEmpty) ...[
+                              const SizedBox(height: 30),
+                              const _SectionLabel('Continue reading'),
+                              const SizedBox(height: 14),
+                              LayoutBuilder(
+                                builder: (context, constraints) {
+                                  // Like CSS auto-fit: as many 300px+ columns as fit, at most
+                                  // one per book, sharing the full width.
+                                  final fit = ((constraints.maxWidth + 16) / 316).floor().clamp(1, 3);
+                                  final columns = fit < current.length ? fit : current.length;
+                                  final shown = current.take(columns).toList();
+                                  return Row(
+                                    children: [
+                                      for (var i = 0; i < columns; i++) ...[
+                                        if (i > 0) const SizedBox(width: 16),
+                                        Expanded(
+                                          child: i < shown.length
+                                              ? _ContinueCard(
+                                                  book: shown[i],
+                                                  cover: _covers.coverFor(shown[i]),
+                                                  onOpen: () => _open(shown[i]),
+                                                )
+                                              : const SizedBox(),
+                                        ),
+                                      ],
+                                    ],
+                                  );
+                                },
+                              ),
+                            ],
+                            const SizedBox(height: 30),
+                            _SectionLabel(current.isEmpty ? 'Books' : 'Library'),
+                            const SizedBox(height: 14),
+                          ],
                         ),
-                      ],
-                      const SizedBox(height: 30),
-                      _SectionLabel(current.isEmpty ? 'Books' : 'Library'),
-                      const SizedBox(height: 14),
+                      ),
+                      _grid(
+                        books,
+                        padding: const EdgeInsets.fromLTRB(40, 0, 40, 40),
+                        maxExtent: 160,
+                        aspect: 0.64,
+                        spacing: (24, 20),
+                        tile: (book) => _DesktopTile(
+                          book: book,
+                          cover: _covers.coverFor(book),
+                          transfer: librarySync.transferFor(book.id),
+                          onTap: () => _open(book),
+                          onMenu: (position) => _showBookMenu(book, position),
+                          onDelete: () => _removeWithKey(book),
+                        ),
+                        emptyHint: _shelf != null
+                            ? 'Drag books onto "${_shelf!.name}" in the sidebar, or right-click a book → Shelves.'
+                            : 'Click "Add PDF" or drop PDF files anywhere in this window.',
+                      ),
                     ],
                   ),
                 ),
-                _grid(
-                  books,
-                  padding: const EdgeInsets.fromLTRB(40, 0, 40, 40),
-                  maxExtent: 160,
-                  aspect: 0.64,
-                  spacing: (24, 20),
-                  tile: (book) => _DesktopTile(
-                    book: book,
-                    cover: _covers.coverFor(book),
-                    transfer: librarySync.transferFor(book.id),
-                    onTap: () => _open(book),
-                    onMenu: (position) => _showBookMenu(book, position),
-                  ),
-                  emptyHint: _shelf != null
-                      ? 'Drag books onto "${_shelf!.name}" in the sidebar, or right-click a book → Shelves.'
-                      : 'Click "Add PDF" or drop PDF files anywhere in this window.',
-                ),
+                const _LibraryFooter(),
               ],
             ),
           ),
@@ -1286,13 +1308,16 @@ class _TabletTile extends StatelessWidget {
 }
 
 /// Desktop grid tile: cover and a thin progress bar; drag it onto a shelf.
-class _DesktopTile extends StatelessWidget {
+/// Tab or the arrow keys select a tile, Enter opens it, Del removes the
+/// download.
+class _DesktopTile extends StatefulWidget {
   const _DesktopTile({
     required this.book,
     required this.cover,
     required this.transfer,
     required this.onTap,
     required this.onMenu,
+    required this.onDelete,
   });
 
   final Book book;
@@ -1300,11 +1325,20 @@ class _DesktopTile extends StatelessWidget {
   final Transfer? transfer;
   final VoidCallback onTap;
   final ValueChanged<Offset> onMenu;
+  final VoidCallback onDelete;
+
+  @override
+  State<_DesktopTile> createState() => _DesktopTileState();
+}
+
+class _DesktopTileState extends State<_DesktopTile> {
+  var _selected = false;
 
   @override
   Widget build(BuildContext context) {
-    final t = transfer;
-    final coverWidget = BookCoverFrame(book: book, cover: cover, overlay: t == null ? null : _TransferOverlay(t));
+    final book = widget.book;
+    final t = widget.transfer;
+    final primary = Theme.of(context).colorScheme.primary;
     return Draggable<String>(
       data: book.id,
       dragAnchorStrategy: pointerDragAnchorStrategy,
@@ -1313,28 +1347,87 @@ class _DesktopTile extends StatelessWidget {
         child: SizedBox(
           width: 70,
           height: 100,
-          child: BookCoverFrame(book: book, cover: cover),
+          child: BookCoverFrame(book: book, cover: widget.cover),
         ),
       ),
       child: Tooltip(
         message: '${book.title}\n${_tabletStatus(book, t)}',
         waitDuration: const Duration(milliseconds: 500),
         child: GestureDetector(
-          onSecondaryTapUp: (d) => onMenu(d.globalPosition),
-          onLongPressStart: (d) => onMenu(d.globalPosition),
-          child: InkWell(
-            onTap: onTap,
-            borderRadius: BorderRadius.circular(6),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(child: coverWidget),
-                const SizedBox(height: 8),
-                ProgressLine(value: book.progress, height: 3),
-              ],
+          onSecondaryTapUp: (d) => widget.onMenu(d.globalPosition),
+          onLongPressStart: (d) => widget.onMenu(d.globalPosition),
+          child: CallbackShortcuts(
+            bindings: {const SingleActivator(LogicalKeyboardKey.delete): widget.onDelete},
+            child: InkWell(
+              onTap: widget.onTap,
+              onFocusChange: (focused) => setState(() => _selected = focused),
+              focusColor: Colors.transparent,
+              borderRadius: BorderRadius.circular(6),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(
+                    child: DecoratedBox(
+                      position: DecorationPosition.foreground,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(6),
+                        border: _selected ? Border.all(color: primary, width: 3) : null,
+                      ),
+                      child: BookCoverFrame(
+                        book: book,
+                        cover: widget.cover,
+                        overlay: t == null ? null : _TransferOverlay(t),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  ProgressLine(value: book.progress, height: 3),
+                ],
+              ),
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Hints along the bottom of the desktop library.
+class _LibraryFooter extends StatelessWidget {
+  const _LibraryFooter();
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final muted = theme.colorScheme.onSurfaceVariant;
+    Widget hint(String keys, String text) => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+          decoration: BoxDecoration(color: const Color(0xFFEEF0EF), borderRadius: BorderRadius.circular(4)),
+          child: Text(keys, style: TextStyle(fontSize: 13, color: muted)),
+        ),
+        const SizedBox(width: 6),
+        Text(text, style: TextStyle(fontSize: 13, color: muted)),
+      ],
+    );
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 40),
+      padding: const EdgeInsets.only(top: 16, bottom: 18),
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Color(0xFFE1E5E3))),
+      ),
+      child: Wrap(
+        spacing: 20,
+        runSpacing: 8,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text('Drop PDFs anywhere in this window to add them', style: TextStyle(fontSize: 13, color: muted)),
+          hint('Ctrl O', 'open file'),
+          hint('Enter', 'open selected'),
+          hint('Del', 'remove download'),
+        ],
       ),
     );
   }

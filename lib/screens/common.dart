@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../models/book.dart';
 
@@ -270,4 +271,16 @@ Future<void> showShortcutsDialog(BuildContext context, List<(String, String)> sh
       );
     },
   );
+}
+
+/// Opens the shortcuts list on "?", unless a text field has focus (where "?"
+/// must be typed). Use as a [Focus.onKeyEvent] high in the screen.
+KeyEventResult questionMarkOpens(KeyEvent event, VoidCallback open) {
+  if (event is! KeyDownEvent || event.character != '?') return KeyEventResult.ignored;
+  final focused = FocusManager.instance.primaryFocus?.context;
+  if (focused != null && focused.findAncestorStateOfType<EditableTextState>() != null) {
+    return KeyEventResult.ignored;
+  }
+  open();
+  return KeyEventResult.handled;
 }

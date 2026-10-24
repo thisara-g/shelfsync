@@ -450,13 +450,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
           _pageField.selection = TextSelection(baseOffset: 0, extentOffset: _pageField.text.length);
         },
         const SingleActivator(LogicalKeyboardKey.keyB, control: true): () => setState(() => _panel = !_panel),
-        const CharacterActivator('?'): () => showShortcutsDialog(context, _shortcuts),
         if (offer != null) const SingleActivator(LogicalKeyboardKey.keyJ): _acceptJump,
         if (offer != null) const SingleActivator(LogicalKeyboardKey.escape): _declineJump,
       },
       child: Focus(
         focusNode: _focusNode,
         autofocus: true,
+        onKeyEvent: (_, event) => questionMarkOpens(event, () => showShortcutsDialog(context, _shortcuts)),
         child: _desktop ? _desktopLayout(context, offer) : _touchLayout(context, offer),
       ),
     );
