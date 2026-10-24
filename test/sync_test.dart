@@ -110,4 +110,62 @@ void main() {
     expect(sync.account, isNull);
     expect(auth.signOuts, 1);
   });
+
+  test('sign out finishes even when the Drive client was already closed', () async {
+    // Like googleapis_auth: closing the same client twice throws.
+    final client = _CloseOnceClient(FakeDrive().client());
+    final auth = _ClosingAuth(client);
+    final sync = SyncController(auth);
+    await sync.start();
+    expect(sync.status, SyncStatus.connected);
+
+    final signingOut = sync.signOut();
+    // Signed out at once, before revoking finishes.
+    expect(sync.status, SyncStatus.signedOut);
+    expect(sync.account, isNull);
+    await signingOut;
+    expect(auth.signedOut, isTrue);
+  });
+}
+
+class _CloseOnceClient extends http.BaseClient {
+  _CloseOnceClient(this.inner);
+
+  final http.Client inner;
+  var _closed = false;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) => inner.send(request);
+
+  @override
+  void close() {
+    if (_closed) throw StateError('Cannot close a HTTP client more than once.');
+    _closed = true;
+    inner.close();
+  }
+}
+
+/// Like the desktop auth: its sign-out closes the client it handed out.
+class _ClosingAuth implements GoogleAuth {
+  _ClosingAuth(this.client);
+
+  final http.Client client;
+  var signedOut = false;
+
+  @override
+  bool get isConfigured => true;
+  @override
+  Future<http.Client?> restore() async => client;
+  @override
+  Future<http.Client> signIn() async => client;
+  @override
+  Future<void> signOut() async {
+    try {
+      client.close();
+    } on StateError {
+      // Already closed.
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    signedOut = true;
+  }
 }

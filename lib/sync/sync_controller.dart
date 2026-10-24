@@ -56,13 +56,21 @@ class SyncController extends ChangeNotifier {
     }
   }
 
+  /// Shows as signed out at once, then lets [auth] forget and revoke the
+  /// sign-in, which may take a network round trip.
   Future<void> signOut() async {
-    _drive?.client.close();
+    final drive = _drive;
     _drive = null;
     _account = null;
     _folderId = null;
-    await auth.signOut();
+    _error = null;
     _set(SyncStatus.signedOut);
+    try {
+      drive?.client.close();
+    } on StateError {
+      // Already closed: googleapis_auth clients throw on a second close.
+    }
+    await auth.signOut();
   }
 
   Future<void> _connect(http.Client client) async {

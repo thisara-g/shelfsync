@@ -37,7 +37,9 @@ abstract class GoogleAuth {
 
 Future<void> _revoke(String token) async {
   try {
-    await http.post(Uri.parse('https://oauth2.googleapis.com/revoke'), body: {'token': token});
+    await http
+        .post(Uri.parse('https://oauth2.googleapis.com/revoke'), body: {'token': token})
+        .timeout(const Duration(seconds: 10));
   } catch (_) {
     // Offline: forgetting the local credentials is still a sign-out.
   }
@@ -93,10 +95,17 @@ class DesktopGoogleAuth implements GoogleAuth {
   Future<void> signOut() async {
     final credentials = _client?.credentials;
     await _updates?.cancel();
-    _client?.close();
+    _updates = null;
+    try {
+      _client?.close();
+    } on StateError {
+      // Already closed (by SyncController); closing twice throws.
+    }
     _client = null;
-    if (credentials != null) await _revoke(credentials.refreshToken ?? credentials.accessToken.data);
+    // Forget the sign-in before the network call, so it is gone even if
+    // revoking fails or hangs.
     if (await _credentialsFile.exists()) await _credentialsFile.delete();
+    if (credentials != null) await _revoke(credentials.refreshToken ?? credentials.accessToken.data);
   }
 
   http.Client _adopt(AutoRefreshingAuthClient client) {
