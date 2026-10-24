@@ -82,6 +82,46 @@ class SyncButton extends StatelessWidget {
   }
 }
 
+/// Round account button with the user's initial (tablet library header).
+class AccountAvatar extends StatelessWidget {
+  const AccountAvatar({super.key, required this.sync, required this.librarySync});
+
+  final SyncController sync;
+  final LibrarySync librarySync;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: sync,
+      builder: (context, _) {
+        final account = sync.account;
+        if (account == null) return const SizedBox();
+        final name = account.displayName.isNotEmpty ? account.displayName : account.email;
+        return Tooltip(
+          message: account.email,
+          child: Material(
+            color: const Color(0xFF455A64),
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: () => showAccountSheet(context, sync, librarySync),
+              child: SizedBox.square(
+                dimension: 48,
+                child: Center(
+                  child: Text(
+                    name.characters.first.toUpperCase(),
+                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 /// Account row at the bottom of the desktop sidebar.
 class SidebarAccount extends StatelessWidget {
   const SidebarAccount({super.key, required this.sync, required this.librarySync});
@@ -110,7 +150,7 @@ class SidebarAccount extends StatelessWidget {
         final syncedAt = librarySync.lastSyncedAt;
         final status = label == 'Synced' && syncedAt != null ? 'Synced · ${timeAgo(syncedAt)}' : label;
         return Material(
-          color: theme.colorScheme.surfaceContainerHigh,
+          color: const Color(0xFF202A2E),
           borderRadius: BorderRadius.circular(12),
           child: InkWell(
             borderRadius: BorderRadius.circular(12),
@@ -121,21 +161,28 @@ class SidebarAccount extends StatelessWidget {
                 children: [
                   CircleAvatar(
                     radius: 18,
-                    child: account == null ? Icon(icon, size: 18) : Text(name.characters.first.toUpperCase()),
+                    backgroundColor: const Color(0xFF455A64),
+                    foregroundColor: Colors.white,
+                    child: account == null
+                        ? Icon(icon, size: 18)
+                        : Text(name.characters.first.toUpperCase(), style: const TextStyle(fontWeight: FontWeight.w600)),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: theme.textTheme.titleSmall),
+                        Text(
+                          name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: Color(0xFFECF1EF), fontSize: 14, fontWeight: FontWeight.w600),
+                        ),
                         Text(
                           status,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: problem ? theme.colorScheme.error : theme.colorScheme.primary,
-                          ),
+                          style: TextStyle(fontSize: 13, color: problem ? theme.colorScheme.error : const Color(0xFF80CBC4)),
                         ),
                       ],
                     ),

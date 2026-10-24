@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:googleapis/drive/v3.dart' as drive;
 import 'package:http/http.dart' as http;
 
+import '../models/shelf.dart';
 import 'progress_record.dart';
 
 class DriveAccount {
@@ -195,6 +196,50 @@ class DriveService {
     }
   }
 
+  static const _shelvesQuery = "appProperties has { key='shelfsync' and value='shelves' }";
+
+  /// The synced shelves document, newest copy if two devices raced.
+  Future<StoredShelves?> getShelves() async {
+    final result = await api.files.list(
+      spaces: 'appDataFolder',
+      q: _shelvesQuery,
+      $fields: 'files(id, appProperties)',
+    );
+    String? newestId;
+    var newest = -1;
+    for (final f in result.files ?? const <drive.File>[]) {
+      final updated = int.tryParse(f.appProperties?['updated_ms'] ?? '') ?? 0;
+      if (f.id != null && updated > newest) {
+        newest = updated;
+        newestId = f.id;
+      }
+    }
+    if (newestId == null) return null;
+    final media = await api.files.get(newestId, downloadOptions: drive.DownloadOptions.fullMedia) as drive.Media;
+    final text = await utf8.decodeStream(media.stream);
+    return StoredShelves(newestId, ShelvesDocument.fromJson(jsonDecode(text) as Map<String, dynamic>));
+  }
+
+  /// Creates or overwrites the shelves document. Returns the Drive file id.
+  Future<String> putShelves(ShelvesDocument doc, {String? existingFileId}) async {
+    final bytes = utf8.encode(const JsonEncoder.withIndent('  ').convert(doc.toJson()));
+    final media = drive.Media(Stream.value(bytes), bytes.length, contentType: 'application/json');
+    final metadata = drive.File(appProperties: {
+      'shelfsync': 'shelves',
+      'updated_ms': '${doc.updated.millisecondsSinceEpoch}',
+    });
+    if (existingFileId != null) {
+      final updated = await api.files.update(metadata, existingFileId, uploadMedia: media, $fields: 'id');
+      return updated.id!;
+    }
+    metadata
+      ..name = ShelvesDocument.fileName
+      ..parents = ['appDataFolder']
+      ..mimeType = 'application/json';
+    final created = await api.files.create(metadata, uploadMedia: media, $fields: 'id');
+    return created.id!;
+  }
+
   static const _progressQuery = "appProperties has { key='shelfsync' and value='progress' }";
   static const _progressFields = 'nextPageToken, files(id, appProperties)';
 
@@ -258,4 +303,12 @@ class DriveService {
   }
 
   static Uri folderUrl(String folderId) => Uri.parse('https://drive.google.com/drive/folders/$folderId');
+}
+
+/// A [ShelvesDocument] together with the Drive file holding it.
+class StoredShelves {
+  const StoredShelves(this.fileId, this.document);
+
+  final String fileId;
+  final ShelvesDocument document;
 }

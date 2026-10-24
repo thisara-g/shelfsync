@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
+import 'package:shelfsync/models/shelf.dart';
 import 'package:shelfsync/services/library_store.dart';
 import 'package:shelfsync/sync/drive_service.dart';
 import 'package:shelfsync/sync/google_auth.dart';
@@ -28,6 +29,7 @@ class FakeCloud {
 
   /// appDataFolder progress files: file id -> record.
   final progress = <String, ProgressRecord>{};
+  ShelvesDocument? shelves;
   var email = 'reader@example.com';
   var _nextId = 0;
   var _clock = DateTime(2026, 1, 1);
@@ -114,6 +116,19 @@ class FakeDriveService implements DriveService {
   Future<Map<String, StoredProgress>> listProgress() async => {
         for (final e in cloud.progress.entries) e.value.bookId: StoredProgress(e.key, e.value),
       };
+
+  @override
+  Future<StoredShelves?> getShelves() async {
+    final doc = cloud.shelves;
+    // Round-trip through JSON like the real file, so devices don't share objects.
+    return doc == null ? null : StoredShelves('shelves', ShelvesDocument.fromJson(doc.toJson()));
+  }
+
+  @override
+  Future<String> putShelves(ShelvesDocument doc, {String? existingFileId}) async {
+    cloud.shelves = ShelvesDocument.fromJson(doc.toJson());
+    return 'shelves';
+  }
 
   @override
   Future<StoredProgress?> getProgress(String bookId) async => (await listProgress())[bookId];
@@ -406,6 +421,40 @@ void main() {
 
     await tablet.library.syncNow();
     expect(tablet.store.byId(id)!.title, 'C Programming: A Modern Approach');
+  });
+
+  group('shelves', () {
+    test('a shelf and its books reach the other device', () async {
+      await pc.store.importFile(pdf.path);
+      final id = pc.store.books.single.id;
+      final shelf = await pc.store.createShelf('Semester 8');
+      await pc.store.setOnShelf(shelf.id, id, true);
+      await pc.library.syncNow();
+      expect(pc.store.shelvesDirty, isFalse);
+
+      await tablet.library.syncNow();
+      final synced = tablet.store.shelves.single;
+      expect(synced.name, 'Semester 8');
+      expect(synced.bookIds, {id});
+    });
+
+    test('the newest edit wins', () async {
+      await pc.store.createShelf('Novels');
+      await pc.library.syncNow();
+      await tablet.library.syncNow();
+
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await tablet.store.renameShelf(tablet.store.shelves.single.id, 'Fiction');
+      await tablet.library.syncNow();
+      await pc.library.syncNow();
+      expect(pc.store.shelves.single.name, 'Fiction');
+
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      await pc.store.deleteShelf(pc.store.shelves.single.id);
+      await pc.library.syncNow();
+      await tablet.library.syncNow();
+      expect(tablet.store.shelves, isEmpty);
+    });
   });
 
   test('switching Google accounts unlinks books instead of deleting them', () async {

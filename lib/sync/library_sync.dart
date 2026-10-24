@@ -178,6 +178,19 @@ class LibrarySync extends ChangeNotifier {
       await _reconcile(book, progress[book.id]);
     }
     await _pushDirtyProgress();
+    await _syncShelves(drive);
+  }
+
+  /// Shelves are one document: whichever side changed last wins.
+  Future<void> _syncShelves(DriveService drive) async {
+    final remote = await drive.getShelves();
+    final local = store.shelvesDocument;
+    if (remote != null && remote.document.updated.isAfter(local.updated)) {
+      await store.applyRemoteShelves(remote.document);
+    } else if (store.shelvesDirty || (remote == null && local.shelves.isNotEmpty)) {
+      await drive.putShelves(local, existingFileId: remote?.fileId);
+      await store.markShelvesSynced();
+    }
   }
 
   /// Compares a book's local position with the synced one. Newer remote

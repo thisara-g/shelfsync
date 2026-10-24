@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import '../models/book.dart';
+import '../models/shelf.dart';
 
 /// Result of importing a file into the library.
 enum ImportResult { added, duplicate }
@@ -23,6 +24,9 @@ class LibraryStore extends ChangeNotifier {
 
   final Directory rootDir;
   final Map<String, Book> _books = {};
+  final List<Shelf> _shelves = [];
+  DateTime? _shelvesUpdatedAt;
+  bool _shelvesDirty = false;
   ReaderTheme _readerTheme = ReaderTheme.light;
   bool _autoJump = false;
   bool _welcomeDone = false;
@@ -65,6 +69,22 @@ class LibraryStore extends ChangeNotifier {
 
   Book? byId(String id) => _books[id];
 
+  /// Shelves in the order they were created.
+  List<Shelf> get shelves => List.unmodifiable(_shelves);
+
+  Shelf? shelfById(String id) {
+    for (final s in _shelves) {
+      if (s.id == id) return s;
+    }
+    return null;
+  }
+
+  /// Changed here since the last upload.
+  bool get shelvesDirty => _shelvesDirty;
+
+  ShelvesDocument get shelvesDocument =>
+      ShelvesDocument(shelves: _shelves, updated: _shelvesUpdatedAt ?? DateTime.fromMillisecondsSinceEpoch(0));
+
   File fileFor(Book book) => File(p.join(_booksDir.path, '${book.id}.pdf'));
 
   /// Cached first-page thumbnail; may not exist yet (see CoverRenderer).
@@ -85,6 +105,14 @@ class LibraryStore extends ChangeNotifier {
       _syncAccount = settings['syncAccount'] as String?;
       _deviceId = settings['deviceId'] as String? ?? '';
       _deviceName = settings['deviceName'] as String? ?? '';
+      final shelves = json['shelves'] as Map<String, dynamic>?;
+      _shelves.clear();
+      if (shelves != null) {
+        final doc = ShelvesDocument.fromJson(shelves);
+        _shelves.addAll(doc.shelves);
+        _shelvesUpdatedAt = doc.updated.millisecondsSinceEpoch == 0 ? null : doc.updated;
+        _shelvesDirty = shelves['dirty'] as bool? ?? false;
+      }
       for (final entry in json['books'] as List<dynamic>) {
         final book = Book.fromJson(entry as Map<String, dynamic>);
         book.isLocal = await fileFor(book).exists();
@@ -130,6 +158,7 @@ class LibraryStore extends ChangeNotifier {
         'deviceName': _deviceName,
       },
       'books': _books.values.map((b) => b.toJson()).toList(),
+      'shelves': {...shelvesDocument.toJson(), 'dirty': _shelvesDirty},
     };
     await tmp.writeAsString(const JsonEncoder.withIndent('  ').convert(json), flush: true);
     await tmp.rename(_indexFile.path);
@@ -276,6 +305,62 @@ class LibraryStore extends ChangeNotifier {
     _syncAccount = email;
     await _save();
     notifyListeners();
+  }
+
+  Future<void> _shelvesChanged() async {
+    _shelvesUpdatedAt = DateTime.now();
+    _shelvesDirty = true;
+    await _save();
+    notifyListeners();
+  }
+
+  Future<Shelf> createShelf(String name) async {
+    final random = Random.secure();
+    final shelf = Shelf(
+      id: List.generate(8, (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0')).join(),
+      name: name.trim(),
+      color: _shelves.length % shelfColors.length,
+    );
+    _shelves.add(shelf);
+    await _shelvesChanged();
+    return shelf;
+  }
+
+  Future<void> renameShelf(String id, String name) async {
+    final shelf = shelfById(id);
+    if (shelf == null || name.trim().isEmpty || shelf.name == name.trim()) return;
+    shelf.name = name.trim();
+    await _shelvesChanged();
+  }
+
+  /// Deletes the shelf; its books stay in the library.
+  Future<void> deleteShelf(String id) async {
+    _shelves.removeWhere((s) => s.id == id);
+    await _shelvesChanged();
+  }
+
+  Future<void> setOnShelf(String shelfId, String bookId, bool on) async {
+    final shelf = shelfById(shelfId);
+    if (shelf == null) return;
+    final changed = on ? shelf.bookIds.add(bookId) : shelf.bookIds.remove(bookId);
+    if (changed) await _shelvesChanged();
+  }
+
+  /// Adopts shelves synced from another device.
+  Future<void> applyRemoteShelves(ShelvesDocument doc) async {
+    _shelves
+      ..clear()
+      ..addAll(doc.shelves);
+    _shelvesUpdatedAt = doc.updated;
+    _shelvesDirty = false;
+    await _save();
+    notifyListeners();
+  }
+
+  Future<void> markShelvesSynced() async {
+    if (!_shelvesDirty) return;
+    _shelvesDirty = false;
+    await _save();
   }
 
   Future<void> setReaderTheme(ReaderTheme value) async {
