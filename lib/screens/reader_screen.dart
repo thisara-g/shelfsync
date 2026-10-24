@@ -81,6 +81,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Size? _viewSize;
   Timer? _resizeTimer;
 
+  /// A zoom the user chose (buttons, keys, pinch, Ctrl+wheel). Page turns
+  /// from ↑/↓ and window resizes keep it; ←/→ and layout changes fit the
+  /// page again.
+  double? _userZoom;
+
+  /// The zoom [_frame] last applied, and whether it is applying one now, to
+  /// tell our own zoom changes from the user's.
+  double? _framedZoom;
+  bool _framing = false;
+
   /// Page being dragged to on the slider, before letting go.
   double? _sliderPage;
 
@@ -233,6 +243,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
       (visible.top - pageRect.top) / pageRect.height,
     );
     _zoom = _controller.currentZoom;
+    final framed = _framedZoom;
+    if (!_framing && framed != null && (_controller.currentZoom - framed).abs() > 0.001) {
+      _userZoom = _controller.currentZoom;
+    }
     _scheduleSave();
   }
 
@@ -316,14 +330,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
     return rect;
   }
 
-  /// Zooms to frame [page]; if it's then taller than the window, shows its
-  /// top (its bottom with [showBottom], or the current height with [keepY]).
-  Future<void> _frame(int page, {bool keepY = false, bool showBottom = false}) async {
+  /// Shows [page] at the user's zoom, or with [fit] (or no zoom chosen) zooms
+  /// so it fits. If it's then taller than the window, shows its top (its
+  /// bottom with [showBottom], or the current height with [keepY]).
+  Future<void> _frame(int page, {bool fit = false, bool keepY = false, bool showBottom = false}) async {
     if (!_controller.isReady || page < 1 || page > _controller.pageCount) return;
+    if (fit) _userZoom = null;
     final rect = _frameRect(page);
     final view = _controller.viewSize;
     final margin = _controller.params.margin;
-    final zoom = frameZoom(rect, view, margin, halveBars: _fullscreen && !_spread);
+    final zoom = _userZoom ?? frameZoom(rect, view, margin, halveBars: _fullscreen && !_spread);
     final Offset position;
     if (rect.height * zoom <= view.height - margin * 2 + 1) {
       position = rect.center;
@@ -334,7 +350,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
     } else {
       position = rect.topCenter.translate(0, (view.height / 2 - margin) / zoom);
     }
-    await _controller.goTo(_controller.calcMatrixFor(position, zoom: zoom, viewSize: view));
+    _framedZoom = zoom;
+    _framing = true;
+    try {
+      await _controller.goTo(_controller.calcMatrixFor(position, zoom: zoom, viewSize: view));
+    } finally {
+      // pdfrx may clamp the zoom; remember what it actually applied.
+      if (_controller.isReady) _framedZoom = _controller.currentZoom;
+      _framing = false;
+    }
   }
 
   /// Keeps Single / Two pages framed when the window changes size.
@@ -351,7 +375,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Future<void> _goToPage(int page) => _showPage(page);
 
-  void _step(int direction, {bool showBottom = false}) {
+  /// Turns a page (or a pair). [fit]: show it whole, dropping any zoom the
+  /// user chose (←/→, PgUp/PgDn); otherwise keep the zoom (↑/↓ running on).
+  void _step(int direction, {bool fit = true, bool showBottom = false}) {
     final page = _page;
     final count = _pageCount;
     if (page == null || count == null) return;
@@ -367,7 +393,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (_layout == ReaderLayout.scroll) {
       _showPage(target);
     } else {
-      _frame(target, showBottom: showBottom);
+      _frame(target, fit: fit, showBottom: showBottom);
     }
   }
 
@@ -384,10 +410,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
       final rect = _frameRect(page);
       final edge = _controller.params.margin / _controller.currentZoom;
       if (direction > 0) {
-        if (visible.bottom >= rect.bottom - 1) return _step(1);
+        if (visible.bottom >= rect.bottom - 1) return _step(1, fit: false);
         centerY = math.min(centerY, rect.bottom + edge - visible.height / 2);
       } else {
-        if (visible.top <= rect.top + 1) return _step(-1, showBottom: true);
+        if (visible.top <= rect.top + 1) return _step(-1, fit: false, showBottom: true);
         centerY = math.max(centerY, rect.top - edge + visible.height / 2);
       }
     }
@@ -426,10 +452,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _controller.removeListener(_onViewChanged);
       _viewerReady = false;
       _restoreZoom = false;
+      _userZoom = null;
       setState(() => _viewerGeneration++);
     } else {
       setState(() {});
-      if (layout != ReaderLayout.scroll) await _frame(_page ?? 1);
+      if (layout != ReaderLayout.scroll) await _frame(_page ?? 1, fit: true);
     }
     _focusNode.requestFocus();
   }
@@ -502,7 +529,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     // too, but the full-screen zoom must follow the new mode either way).
     await Future<void>.delayed(const Duration(milliseconds: 400));
     if (!mounted || !_controller.isReady || _layout == ReaderLayout.scroll) return;
-    await _frame(_page ?? 1);
+    await _frame(_page ?? 1, fit: true);
   }
 
   // --- Touch chrome -----------------------------------------------------------
@@ -1064,13 +1091,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(color: _Chrome.text, fontSize: 15, fontWeight: FontWeight.w600),
                         ),
-                        if (chapter != null)
-                          Text(
-                            chapter,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: _Chrome.muted, fontSize: 13),
-                          ),
+                        // Always two lines, so the toolbar (and the page area
+                        // under it) keeps its height when the chapter changes.
+                        Text(
+                          chapter ?? ' ',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: _Chrome.muted, fontSize: 13),
+                        ),
                       ],
                     ),
                   ),
