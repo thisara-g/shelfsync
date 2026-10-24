@@ -701,7 +701,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   static const _shortcuts = [
     ('Ctrl+O', 'Add PDFs'),
-    ('Ctrl+K', 'Search'),
+    ('Ctrl+F', 'Search'),
     ('Tab / arrow keys', 'Select a book'),
     ('Enter', 'Open the selected book'),
     ('Del', 'Remove the selected book\'s download'),
@@ -728,7 +728,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyO, control: true): _addBooks,
-        const SingleActivator(LogicalKeyboardKey.keyK, control: true): _searchFocus.requestFocus,
         const SingleActivator(LogicalKeyboardKey.keyF, control: true): _searchFocus.requestFocus,
       },
       child: Focus(
@@ -1013,7 +1012,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       hintText: 'Search books',
                       prefixIcon: const Icon(Icons.search, size: 18),
                       suffixIcon: _search.text.isEmpty
-                          ? const Padding(padding: EdgeInsets.all(10), child: _Kbd('Ctrl K'))
+                          ? const Padding(padding: EdgeInsets.all(10), child: _Kbd('Ctrl F'))
                           : IconButton(
                               tooltip: 'Clear',
                               icon: const Icon(Icons.close, size: 18),

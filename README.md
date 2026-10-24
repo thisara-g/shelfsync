@@ -80,7 +80,7 @@ that app when Android asks.
 |---|---|
 | **Add books** | **Add PDF**, or on Linux drag PDF files onto the window (Ctrl+O also works). They upload to Drive in the background. |
 | **Continue reading** | The top of the library shows what you're reading on any device, where you were and when. One tap or click to continue. |
-| **Find books** | Search, filter (Reading, Finished, In Drive, On this device) and sort. On Linux the sidebar holds the filters and Ctrl+K jumps to search. |
+| **Find books** | Search, filter (Reading, Finished, In Drive, On this device) and sort. On Linux the sidebar holds the filters and Ctrl+F jumps to search. |
 | **Books from your other device** | Shown with a cloud badge. Tap one to download and open it. |
 | **Shelves** | Group books into shelves ("Textbooks", "Novels"). Create them from the sidebar (Linux) or the pills (tablet); drag a cover onto a shelf or use a book's **Shelves…** menu. Shelves sync between devices. |
 | **Reader (tablet)** | Tap the page to show or hide the controls. Drag the slider to move through the book (ticks mark chapters). Search, contents/pages/bookmarks and the bookmark button are in the top bar. |
