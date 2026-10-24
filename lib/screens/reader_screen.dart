@@ -609,6 +609,38 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   // --- Desktop bars ---------------------------------------------------------
 
+  double? _pinchStartZoom;
+  Offset? _pinchFocus;
+
+  /// The bars sit over the page; wheel scrolls and touchpad pinches or
+  /// two-finger scrolls made over them go to the page instead of being lost.
+  Widget _passToPage(Widget bar) {
+    return Listener(
+      onPointerSignal: (event) {
+        if (_controller.isReady) _controller.handlePointerSignalEvent(event);
+      },
+      onPointerPanZoomStart: (event) {
+        if (!_controller.isReady) return;
+        _pinchStartZoom = _controller.currentZoom;
+        _pinchFocus = _controller.globalToDocument(event.position) ?? _controller.centerPosition;
+      },
+      onPointerPanZoomUpdate: (event) {
+        final start = _pinchStartZoom, focus = _pinchFocus;
+        if (start == null || focus == null || !_controller.isReady) return;
+        final zoom = (start * event.scale).clamp(_controller.minScale, _controller.maxScale);
+        final center = _controller.centerPosition - event.localPanDelta / zoom;
+        // Zoom around the pinch point, then apply the two-finger pan.
+        final around = focus + (center - focus) * (_controller.currentZoom / zoom);
+        _controller.goTo(_controller.calcMatrixFor(around, zoom: zoom), duration: Duration.zero);
+      },
+      onPointerPanZoomEnd: (_) {
+        _pinchStartZoom = null;
+        _pinchFocus = null;
+      },
+      child: bar,
+    );
+  }
+
   void _showBars() {
     _setBars(true);
     _scheduleBarsHide();
@@ -1445,7 +1477,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    toolbar,
+                    _passToPage(toolbar),
                     if (_searching) _searchStrip(background: _Chrome.group),
                   ],
                 ),
@@ -1459,7 +1491,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
               child: MouseRegion(
                 // Moving over the bars counts as activity.
                 onHover: (_) => _scheduleBarsHide(),
-                child: footer,
+                child: _passToPage(footer),
               ),
             ),
           ],
