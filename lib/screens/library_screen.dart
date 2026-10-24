@@ -301,7 +301,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
   // --- Shelves --------------------------------------------------------------
 
   Future<Shelf?> _newShelf() async {
-    final name = await _askName(title: 'New shelf', action: 'Create');
+    final name = await _askName(title: 'Create shelf', action: 'Create');
     if (name == null) return null;
     final shelf = await store.createShelf(name);
     librarySync.syncNow();
@@ -349,7 +349,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       if (shelf != null) await store.setOnShelf(shelf.id, book.id, true);
                     },
                     icon: const Icon(Icons.add),
-                    label: const Text('New shelf'),
+                    label: const Text('Create shelf'),
                   ),
                 ),
               ],
@@ -510,7 +510,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
           onMenu: (position) => _showShelfMenu(shelf, position),
         ),
       _Pill(
-        label: '+ New shelf',
+        label: '+ Create shelf',
         selected: false,
         onTap: () async {
           final shelf = await _newShelf();
@@ -1123,7 +1123,7 @@ class _Sidebar extends StatelessWidget {
                     ),
                   _SideItem(
                     icon: const SizedBox(width: 10),
-                    label: '+ New shelf',
+                    label: '+ Create shelf',
                     muted: true,
                     height: 40,
                     onTap: onNewShelf,
