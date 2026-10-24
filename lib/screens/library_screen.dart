@@ -39,13 +39,16 @@ enum LibraryFilter {
 }
 
 enum LibrarySort {
-  recent('Recently read'),
-  title('Title'),
-  added('Recently added');
+  recent('Recently read', 'Last opened on any of your devices'),
+  title('Title', 'A to Z'),
+  added('Recently added', 'Newest first');
 
-  const LibrarySort(this.label);
+  const LibrarySort(this.label, this.hint);
 
   final String label;
+
+  /// One line under the label in the desktop Sort menu.
+  final String hint;
 }
 
 /// Colours of the desktop sidebar, which stays dark in both themes.
@@ -103,6 +106,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
 
   /// Right-click menu of a desktop book.
   final _menu = MenuController();
+  final _sortMenu = MenuController();
   final _menuAnchor = GlobalKey();
   Book? _menuBook;
 
@@ -1036,28 +1040,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
               ),
             ),
             const SizedBox(width: 12),
-            PopupMenuButton<LibrarySort>(
-              tooltip: 'Sort',
-              initialValue: _sort,
-              onSelected: (s) => setState(() => _sort = s),
-              itemBuilder: (_) => [for (final s in LibrarySort.values) PopupMenuItem(value: s, child: Text(s.label))],
-              child: Container(
-                height: 42,
-                padding: const EdgeInsets.only(left: 14, right: 8),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.surface,
-                  border: Border.all(color: border),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text('Sort: ${_sort.label}', style: const TextStyle(fontSize: 15)),
-                    const Icon(Icons.arrow_drop_down),
-                  ],
-                ),
-              ),
-            ),
+            _SortButton(controller: _sortMenu, sort: _sort, onSort: (s) => setState(() => _sort = s)),
             const SizedBox(width: 12),
             FilledButton.icon(
               style: filled,
@@ -2261,6 +2244,139 @@ class _RenameBookDialogState extends State<_RenameBookDialog> {
   }
 }
 
+/// "Sort: Recently read ▾" (the arrow pinned right), which opens a menu under it (right edges lined
+/// up) with the current order ticked and each order explained. The button
+/// stays lit while the menu is open.
+class _SortButton extends StatelessWidget {
+  const _SortButton({required this.controller, required this.sort, required this.onSort});
+
+  final MenuController controller;
+  final LibrarySort sort;
+  final ValueChanged<LibrarySort> onSort;
+
+  static const _width = 280.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return MenuAnchor(
+      controller: controller,
+      style: _Menu.style.copyWith(
+        minimumSize: const WidgetStatePropertyAll(Size(_width, 0)),
+        maximumSize: const WidgetStatePropertyAll(Size(_width, double.infinity)),
+        alignment: AlignmentDirectional.bottomEnd,
+      ),
+      alignmentOffset: const Offset(-_width, 8),
+      menuChildren: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(12, 8, 12, 6),
+          child: Text(
+            'SORT BY',
+            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 1, color: _Side.muted),
+          ),
+        ),
+        for (final option in LibrarySort.values)
+          MenuItemButton(
+            style: _Menu.option(selected: option == sort),
+            onPressed: () => onSort(option),
+            // Fixed width: the panel's 6px padding and the item's 12px each side.
+            child: SizedBox(
+              width: _width - 12 - 24,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SizedBox(
+                    width: 18,
+                    child: Text(
+                      option == sort ? '✓' : '',
+                      style: const TextStyle(
+                        color: _Menu.teal,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                        height: 20 / 15,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          option.label,
+                          style: TextStyle(
+                            fontSize: 15,
+                            height: 20 / 15,
+                            fontWeight: option == sort ? FontWeight.w600 : FontWeight.normal,
+                            color: option == sort ? const Color(0xFF00695C) : _Menu.ink,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(option.hint, style: const TextStyle(fontSize: 13, color: Color(0xFF5B6764))),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
+      builder: (context, controller, _) {
+        final open = controller.isOpen;
+        final label = TextStyle(
+          fontSize: 15,
+          fontWeight: open ? FontWeight.w600 : FontWeight.normal,
+          color: open ? const Color(0xFF00695C) : scheme.onSurface,
+        );
+        return Material(
+          color: open ? const Color(0xFFE0F2F1) : scheme.surface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+            side: open ? const BorderSide(color: _Menu.teal, width: 2) : BorderSide(color: scheme.outlineVariant),
+          ),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: () => open ? controller.close() : controller.open(),
+            child: Container(
+              height: 42,
+              padding: EdgeInsets.only(left: open ? 15 : 16, right: open ? 11 : 12),
+              alignment: Alignment.center,
+              // As wide as the longest order (in the bold, open style), so the
+              // button keeps its size whatever is chosen.
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Stack(
+                    alignment: AlignmentDirectional.centerStart,
+                    children: [
+                      for (final option in LibrarySort.values)
+                        Visibility.maintain(
+                          visible: false,
+                          child: Text(
+                            'Sort: ${option.label}',
+                            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      Text('Sort: ${sort.label}', style: label),
+                    ],
+                  ),
+                  const SizedBox(width: 6),
+                  // An icon, not ▴/▾: those glyphs sit on the baseline, off centre.
+                  Icon(
+                    open ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
+                    size: 20,
+                    color: label.color,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 /// Look of the desktop book menu and its "Add to shelf" submenu.
 abstract final class _Menu {
   static const ink = Color(0xFF1D2321);
@@ -2311,6 +2427,22 @@ abstract final class _Menu {
   );
 
   static final item = _item(ink);
+
+  /// A two-line choice in the Sort menu: mint when chosen, grey on hover.
+  static ButtonStyle option({required bool selected}) => ButtonStyle(
+    minimumSize: const WidgetStatePropertyAll(Size(268, 0)),
+    padding: const WidgetStatePropertyAll(EdgeInsets.symmetric(horizontal: 12, vertical: 9)),
+    shape: WidgetStatePropertyAll(RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+    textStyle: const WidgetStatePropertyAll(TextStyle(fontFamily: uiFamily)),
+    backgroundColor: WidgetStateProperty.resolveWith(
+      (states) => selected
+          ? const Color(0xFFE0F2F1)
+          : (states.contains(WidgetState.hovered) || states.contains(WidgetState.focused)
+                ? const Color(0xFFF1F4F3)
+                : Colors.transparent),
+    ),
+    overlayColor: const WidgetStatePropertyAll(Colors.transparent),
+  );
   static final danger = _item(red, active: const Color(0xFFFDECEC));
   static final submenu = _item(ink, active: const Color(0xFFE0F2F1), activeText: const Color(0xFF00695C));
 }

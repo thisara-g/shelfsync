@@ -293,4 +293,43 @@ void main() {
     await _settle(tester);
     expect(find.text('Enter to save · Esc to cancel'), findsOneWidget);
   });
+
+  testWidgets('Sort menu: current order ticked, each explained, lined up under the button', (tester) async {
+    await _pumpLibrary(tester);
+    final button = find.text('Sort: Recently read').last;
+    expect(button, findsOneWidget);
+
+    await tester.tap(button);
+    await _settle(tester);
+    expect(find.text('Sort: Recently read').last, findsOneWidget);
+    expect(find.text('SORT BY'), findsOneWidget);
+    expect(find.text('Last opened on any of your devices'), findsOneWidget);
+    expect(find.text('A to Z'), findsOneWidget);
+    expect(find.text('Newest first'), findsOneWidget);
+    expect(find.text('✓'), findsOneWidget);
+
+    // Right edges line up; the menu starts 8px below the button.
+    final buttonBox = tester.getRect(
+      find.ancestor(of: find.text('Sort: Recently read').last, matching: find.byType(InkWell)).first,
+    );
+    final menuBox = tester.getRect(find.ancestor(of: find.text('SORT BY'), matching: find.byType(Material)).first);
+    // The arrow flips up and sits at the button's right edge.
+    final arrow = tester.getRect(find.byIcon(Icons.keyboard_arrow_up_rounded));
+    expect(arrow.right, closeTo(buttonBox.right - 11, 1));
+    expect(arrow.center.dy, closeTo(buttonBox.center.dy, 0.5));
+    expect(menuBox.width, 280);
+    expect(menuBox.right, closeTo(buttonBox.right, 1));
+    expect(menuBox.top, greaterThan(buttonBox.bottom));
+
+    await tester.tap(find.text('Title'));
+    await _settle(tester);
+    expect(find.text('Sort: Title').last, findsOneWidget);
+    expect(find.byIcon(Icons.keyboard_arrow_down_rounded), findsOneWidget);
+    // The button keeps one width, that of the longest order.
+    final titleBox = tester.getRect(
+      find.ancestor(of: find.text('Sort: Title').last, matching: find.byType(InkWell)).first,
+    );
+    expect(titleBox.width, closeTo(buttonBox.width, 2.5));
+    expect(find.text('SORT BY'), findsNothing);
+  });
 }
