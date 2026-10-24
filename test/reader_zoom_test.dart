@@ -276,4 +276,69 @@ void main() {
     await tester.pump(const Duration(seconds: 10));
     await tester.runAsync(() => tmp.delete(recursive: true));
   });
+
+  testWidgets('opening the contents panel narrows the page smoothly', (tester) async {
+    Pdfrx.pdfiumModulePath = File('build/native_assets/linux/libpdfium.so').absolute.path;
+    final tmp = await tester.runAsync(() => Directory.systemTemp.createTemp('z'));
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+      const MethodChannel('plugins.flutter.io/path_provider'),
+      (call) async => tmp!.path,
+    );
+    final store = LibraryStore(Directory(p.join(tmp!.path, 'lib')));
+    await tester.runAsync(() async {
+      await store.load();
+      await store.importFile('test/fixtures/six_pages.pdf');
+    });
+    final sync = SyncController(_NoAuth());
+    await tester.runAsync(sync.start);
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: shelfSyncTheme(),
+        home: ReaderScreen(
+          store: store,
+          librarySync: LibrarySync(store: store, sync: sync),
+          book: store.books.single,
+        ),
+      ),
+    );
+    Future<void> settle() async {
+      for (var i = 0; i < 12; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 60)));
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+    }
+
+    await settle();
+    final c = tester.widget<PdfViewer>(find.byType(PdfViewer)).controller!;
+    final zoom = c.currentZoom;
+    final center = c.centerPosition;
+    final width = c.viewSize.width;
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.control);
+    await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.control);
+    // Frame by frame through the slide: the page area narrows gradually and
+    // the page stays centred at the same zoom (no jumps).
+    final widths = <double>[];
+    for (var i = 0; i < 14; i++) {
+      await tester.pump(const Duration(milliseconds: 16));
+      widths.add(c.viewSize.width);
+      expect(c.currentZoom, closeTo(zoom, 1e-6), reason: 'no zoom change mid-slide');
+      expect((c.centerPosition - center).distance, lessThan(2), reason: 'page stays centred');
+    }
+    expect(widths.toSet().length, greaterThan(4), reason: 'width changes gradually');
+    expect(widths.last, lessThan(width));
+
+    // Afterwards it fits the narrower area.
+    await settle();
+    expect(c.viewSize.width, closeTo(width - 280, 1));
+    expect(find.text('Bookmarks'), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 10));
+    await tester.runAsync(() => tmp.delete(recursive: true));
+  });
 }

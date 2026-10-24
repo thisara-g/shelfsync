@@ -89,6 +89,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// Desktop layout: whether the contents / pages / bookmarks panel is open.
   bool _panel = false;
   int _panelTab = 0;
+  static const _panelWidth = 280.0;
+  static const _panelDuration = Duration(milliseconds: 260);
+
+  /// While the panel opens or closes the page area changes width every
+  /// frame: keep the page centred then, and fit it once at the end.
+  bool _panelAnimating = false;
+  Offset? _panelCenter;
 
   bool _searching = false;
   bool _fullscreen = false;
@@ -419,6 +426,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final first = _viewSize == null;
     _viewSize = size;
     if (first || _layout == ReaderLayout.scroll) return;
+    final center = _panelCenter;
+    if (_panelAnimating && center != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_controller.isReady) return;
+        _controller.goTo(_controller.calcMatrixFor(center, zoom: _controller.currentZoom), duration: Duration.zero);
+      });
+      return;
+    }
     _resizeTimer?.cancel();
     _resizeTimer = Timer(const Duration(milliseconds: 150), () {
       if (mounted && _viewerReady) _frame(_page ?? 1);
@@ -605,6 +620,22 @@ class _ReaderScreenState extends State<ReaderScreen> {
     } else {
       await _frame(page, fit: true);
     }
+  }
+
+  void _togglePanel() {
+    _resizeTimer?.cancel();
+    setState(() {
+      _panel = !_panel;
+      _panelAnimating = true;
+      _panelCenter = _controller.isReady ? _controller.centerPosition : null;
+    });
+  }
+
+  void _onPanelAnimated() {
+    if (!_panelAnimating) return;
+    setState(() => _panelAnimating = false);
+    // Glide to the fit for the new width (keeps a zoom the user chose).
+    if (_viewerReady && _layout != ReaderLayout.scroll) _frame(_page ?? 1);
   }
 
   // --- Desktop bars ---------------------------------------------------------
@@ -874,7 +905,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       final VoidCallback? action = switch (key) {
         LogicalKeyboardKey.keyF => _openSearch,
         LogicalKeyboardKey.keyD => _toggleBookmark,
-        LogicalKeyboardKey.keyB => () => setState(() => _panel = !_panel),
+        LogicalKeyboardKey.keyB => _togglePanel,
         LogicalKeyboardKey.keyG => () {
           _pageFieldFocus.requestFocus();
           _pageField.selection = TextSelection(baseOffset: 0, extentOffset: _pageField.text.length);
@@ -1204,7 +1235,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
             tooltip: _panel ? 'Hide contents (Ctrl+B)' : 'Show contents (Ctrl+B)',
             icon: Icons.vertical_split_outlined,
             active: _panel,
-            onPressed: () => setState(() => _panel = !_panel),
+            onPressed: _togglePanel,
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -1336,55 +1367,68 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final body = Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (_panel && document != null)
-          Container(
-            width: 280,
+        if (document != null)
+          AnimatedContainer(
+            duration: _panelDuration,
+            curve: Curves.easeInOutCubic,
+            width: _panel ? _panelWidth : 0,
+            clipBehavior: Clip.hardEdge,
             decoration: const BoxDecoration(
               color: _Chrome.panel,
               border: Border(right: BorderSide(color: _Chrome.line)),
             ),
-            child: AnimatedPadding(
-              duration: const Duration(milliseconds: 200),
-              // Clear of the toolbar and footer while they show.
-              padding: EdgeInsets.fromLTRB(10, _bars ? 76 : 14, 10, _bars ? 40 : 0),
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
-                    child: Row(
-                      children: [
-                        for (final (i, label) in const [(0, 'Contents'), (1, 'Pages'), (2, 'Bookmarks')]) ...[
-                          if (i > 0) const SizedBox(width: 4),
-                          Expanded(
-                            child: _PanelTab(
-                              label: label,
-                              selected: _panelTab == i,
-                              onPressed: () => setState(() => _panelTab = i),
+            onEnd: _onPanelAnimated,
+            // The content keeps its full width and is revealed as the panel
+            // widens, rather than being squeezed.
+            child: OverflowBox(
+              alignment: Alignment.centerRight,
+              minWidth: _panelWidth,
+              maxWidth: _panelWidth,
+              child: !_panel && !_panelAnimating
+                  ? const SizedBox()
+                  : AnimatedPadding(
+                      duration: const Duration(milliseconds: 200),
+                      // Clear of the toolbar and footer while they show.
+                      padding: EdgeInsets.fromLTRB(10, _bars ? 76 : 14, 10, _bars ? 40 : 0),
+                      child: Column(
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
+                            child: Row(
+                              children: [
+                                for (final (i, label) in const [(0, 'Contents'), (1, 'Pages'), (2, 'Bookmarks')]) ...[
+                                  if (i > 0) const SizedBox(width: 4),
+                                  Expanded(
+                                    child: _PanelTab(
+                                      label: label,
+                                      selected: _panelTab == i,
+                                      onPressed: () => setState(() => _panelTab = i),
+                                    ),
+                                  ),
+                                ],
+                              ],
                             ),
                           ),
+                          Expanded(
+                            child: switch (_panelTab) {
+                              0 =>
+                                _outline.isEmpty
+                                    ? const _PanelEmpty('This PDF has no table of contents.')
+                                    : _DesktopContents(outline: _outline, page: page, onSelect: _goToPage),
+                              1 => PagesGrid(document: document, page: page, maxExtent: 120, onSelect: _goToPage),
+                              _ => BookmarksList(
+                                pages: _store.bookmarksFor(_book.id),
+                                outline: _outline,
+                                page: page,
+                                onSelect: _goToPage,
+                                onRemove: (p) => _store.toggleBookmark(_book.id, p).then((_) => _sync.syncNow()),
+                                emptyText: 'No bookmarks yet.\nPress Ctrl+D to bookmark a page.',
+                              ),
+                            },
+                          ),
                         ],
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: switch (_panelTab) {
-                      0 =>
-                        _outline.isEmpty
-                            ? const _PanelEmpty('This PDF has no table of contents.')
-                            : _DesktopContents(outline: _outline, page: page, onSelect: _goToPage),
-                      1 => PagesGrid(document: document, page: page, maxExtent: 120, onSelect: _goToPage),
-                      _ => BookmarksList(
-                        pages: _store.bookmarksFor(_book.id),
-                        outline: _outline,
-                        page: page,
-                        onSelect: _goToPage,
-                        onRemove: (p) => _store.toggleBookmark(_book.id, p).then((_) => _sync.syncNow()),
-                        emptyText: 'No bookmarks yet.\nPress Ctrl+D to bookmark a page.',
                       ),
-                    },
-                  ),
-                ],
-              ),
+                    ),
             ),
           ),
         Expanded(
