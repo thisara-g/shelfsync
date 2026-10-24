@@ -66,6 +66,12 @@ void main() {
     expect(await store.fileFor(book).exists(), isFalse);
   });
 
+  test('tidies file-name titles', () {
+    expect(LibraryStore.titleFromFileName('c-programming_2nd-ed.pdf'), 'C programming 2nd ed');
+    expect(LibraryStore.titleFromFileName('Real-Time Systems.pdf'), 'Real-Time Systems');
+    expect(LibraryStore.titleFromFileName('notes.pdf'), 'Notes');
+  });
+
   test('reader settings persist; a fresh install shows the welcome', () async {
     final dir = Directory(p.join(tmp.path, 'lib'));
     final store = LibraryStore(dir);

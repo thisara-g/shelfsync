@@ -173,3 +173,44 @@ class ProgressLine extends StatelessWidget {
     );
   }
 }
+
+/// Lists keyboard shortcuts as (keys, action) pairs.
+Future<void> showShortcutsDialog(BuildContext context, List<(String, String)> shortcuts) {
+  return showDialog<void>(
+    context: context,
+    builder: (context) {
+      final theme = Theme.of(context);
+      return AlertDialog(
+        title: const Text('Keyboard shortcuts'),
+        content: SizedBox(
+          width: 420,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final (keys, action) in shortcuts)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 6),
+                    child: Row(
+                      children: [
+                        Expanded(child: Text(action)),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: theme.colorScheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(keys, style: theme.textTheme.labelMedium),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close'))],
+      );
+    },
+  );
+}

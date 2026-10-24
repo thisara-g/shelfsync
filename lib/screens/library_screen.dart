@@ -132,6 +132,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
             title: Text(book.isLocal ? 'Open' : 'Download and open'),
           ),
         ),
+        const PopupMenuItem(
+          value: 'rename',
+          child: ListTile(leading: Icon(Icons.edit_outlined), title: Text('Rename')),
+        ),
         if (inCloud && book.isLocal)
           const PopupMenuItem(
             value: 'remove-local',
@@ -150,6 +154,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
     switch (action) {
       case 'open':
         await _open(book);
+      case 'rename':
+        await _rename(book);
       case 'remove-local':
         await store.removeLocalCopy(book.id);
         _snack('Download removed. "${book.title}" stays in Google Drive.');
@@ -157,6 +163,45 @@ class _LibraryScreenState extends State<LibraryScreen> {
         await _confirmDelete(book);
     }
   }
+
+  Future<void> _rename(Book book) async {
+    final input = TextEditingController(text: book.title);
+    input.selection = TextSelection(baseOffset: 0, extentOffset: book.title.length);
+    final title = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        void submit() => Navigator.pop(context, input.text);
+        return AlertDialog(
+          title: const Text('Rename book'),
+          content: SizedBox(
+            width: 420,
+            child: TextField(
+              controller: input,
+              autofocus: true,
+              textCapitalization: TextCapitalization.sentences,
+              decoration: const InputDecoration(labelText: 'Title'),
+              onSubmitted: (_) => submit(),
+            ),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+            FilledButton(onPressed: submit, child: const Text('Rename')),
+          ],
+        );
+      },
+    );
+    input.dispose();
+    if (title == null || title.trim().isEmpty || title.trim() == book.title) return;
+    await librarySync.rename(book, title);
+  }
+
+  static const _shortcuts = [
+    ('Ctrl+O', 'Add PDFs'),
+    ('Ctrl+K', 'Search'),
+    ('Right-click a book', 'Open, rename, remove'),
+    ('Drag & drop', 'Add PDFs from the file manager'),
+    ('?', 'Show this list'),
+  ];
 
   Future<void> _confirmDelete(Book book) async {
     final inCloud = book.driveFileId != null;
@@ -259,6 +304,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
         const SingleActivator(LogicalKeyboardKey.keyO, control: true): _addBooks,
         const SingleActivator(LogicalKeyboardKey.keyK, control: true): _searchFocus.requestFocus,
         const SingleActivator(LogicalKeyboardKey.keyF, control: true): _searchFocus.requestFocus,
+        const CharacterActivator('?'): () => showShortcutsDialog(context, _shortcuts),
       },
       child: Focus(
         autofocus: true,
@@ -419,6 +465,11 @@ class _LibraryScreenState extends State<LibraryScreen> {
                         ),
                         const SizedBox(width: 8),
                         _sortButton(),
+                        IconButton(
+                          tooltip: 'Keyboard shortcuts (?)',
+                          icon: const Icon(Icons.keyboard_outlined),
+                          onPressed: () => showShortcutsDialog(context, _shortcuts),
+                        ),
                         const SizedBox(width: 8),
                         FilledButton.icon(onPressed: _addBooks, icon: const Icon(Icons.add), label: const Text('Add PDF')),
                       ],
@@ -458,24 +509,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
                   padding: const EdgeInsets.fromLTRB(40, 0, 40, 24),
                   maxExtent: 160,
                   emptyHint: 'Click "Add PDF" or drop PDF files anywhere in this window.',
-                ),
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(40, 0, 40, 24),
-                  sliver: SliverToBoxAdapter(
-                    child: DefaultTextStyle.merge(
-                      style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-                      child: const Wrap(
-                        spacing: 20,
-                        runSpacing: 8,
-                        children: [
-                          Text('Drop PDFs anywhere in this window to add them'),
-                          _Hint(keys: 'Ctrl O', text: 'add PDF'),
-                          _Hint(keys: 'Ctrl K', text: 'search'),
-                          _Hint(keys: 'Right-click', text: 'book options'),
-                        ],
-                      ),
-                    ),
-                  ),
                 ),
               ],
             ),
@@ -586,18 +619,6 @@ class _Kbd extends StatelessWidget {
       ),
       child: Text(keys, style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
     );
-  }
-}
-
-class _Hint extends StatelessWidget {
-  const _Hint({required this.keys, required this.text});
-
-  final String keys;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(mainAxisSize: MainAxisSize.min, children: [_Kbd(keys), const SizedBox(width: 6), Text(text)]);
   }
 }
 
@@ -732,7 +753,9 @@ String _bookStatus(Book book, Transfer? transfer) {
   if (book.isFinished) return 'Finished';
   if (!book.isStarted) return count == null ? 'New' : 'New · $count pages';
   if (count == null) return 'Page ${book.lastPage}';
-  return '${(book.progress * 100).round()}% · page ${book.lastPage} of $count';
+  final percent = (book.progress * 100).round();
+  if (percent == 0) return 'Page ${book.lastPage} of $count';
+  return '$percent% · page ${book.lastPage} of $count';
 }
 
 class _TransferOverlay extends StatelessWidget {

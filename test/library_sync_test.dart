@@ -16,7 +16,7 @@ class CloudFile {
 
   final String id;
   final String bookId;
-  final String title;
+  String title;
   final Uint8List bytes;
   final DateTime created;
   bool trashed = false;
@@ -59,6 +59,10 @@ class FakeDriveService implements DriveService {
 
   @override
   Future<String> ensureLibraryFolder() async => 'folder';
+
+  @override
+  Future<void> renameBook(String fileId, String title) async =>
+      cloud.files.firstWhere((f) => f.id == fileId).title = title;
 
   @override
   Future<List<RemoteBook>> listBooks(String folderId) async => [
@@ -388,6 +392,20 @@ void main() {
       await pc.store.updateProgress(id, page: 50, pageOffset: const Offset(0.0001, 0.4203), zoom: 1.2);
       expect(pc.store.byId(id)!.progressUpdatedAt, before);
     });
+  });
+
+  test('a rename reaches Drive and the other device', () async {
+    await pc.store.importFile(pdf.path);
+    final id = pc.store.books.single.id;
+    await pc.library.syncNow();
+    await tablet.library.syncNow();
+
+    await pc.library.rename(pc.store.byId(id)!, 'C Programming: A Modern Approach');
+    expect(cloud.live.single.title, 'C Programming: A Modern Approach');
+    expect(pc.store.byId(id)!.titleDirty, isFalse);
+
+    await tablet.library.syncNow();
+    expect(tablet.store.byId(id)!.title, 'C Programming: A Modern Approach');
   });
 
   test('switching Google accounts unlinks books instead of deleting them', () async {

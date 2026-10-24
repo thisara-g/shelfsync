@@ -178,6 +178,8 @@ class DriveService {
   }
 
   /// Moves the file to the Drive trash (recoverable for 30 days).
+  Future<void> renameBook(String fileId, String title) => api.files.update(drive.File(name: '$title.pdf'), fileId);
+
   Future<void> trash(String fileId) => api.files.update(drive.File(trashed: true), fileId);
 
   /// Drive's own first-page thumbnail for a PDF, if it has generated one.

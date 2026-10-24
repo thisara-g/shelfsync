@@ -20,6 +20,7 @@ class Book {
     this.progressUpdatedAt,
     this.progressDevice,
     this.chapter,
+    this.titleDirty = false,
   });
 
   final String id;
@@ -56,6 +57,9 @@ class Book {
   /// Top-level outline entry (e.g. "9 Functions") at [lastPage], as last seen
   /// by this device's reader. Cleared when a position from elsewhere arrives.
   String? chapter;
+
+  /// Renamed here but not yet renamed in Drive.
+  bool titleDirty;
 
   /// Whether the PDF is downloaded on this device. Not persisted: derived from
   /// the file's presence when the library loads.
@@ -100,6 +104,7 @@ class Book {
             : DateTime.fromMillisecondsSinceEpoch(json['progressUpdatedAt'] as int),
         progressDevice: json['progressDevice'] as String?,
         chapter: json['chapter'] as String?,
+        titleDirty: json['titleDirty'] as bool? ?? false,
         lastOpenedAt: json['lastOpenedAt'] == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch(json['lastOpenedAt'] as int),
@@ -120,6 +125,7 @@ class Book {
         'progressUpdatedAt': progressUpdatedAt?.millisecondsSinceEpoch,
         'progressDevice': progressDevice,
         'chapter': chapter,
+        'titleDirty': titleDirty,
         'lastOpenedAt': lastOpenedAt?.millisecondsSinceEpoch,
       };
 }

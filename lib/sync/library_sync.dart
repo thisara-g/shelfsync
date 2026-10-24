@@ -138,6 +138,12 @@ class LibrarySync extends ChangeNotifier {
       final match = remote[book.id];
       if (match != null) {
         await store.setDriveFileId(book.id, match.fileId);
+        if (book.titleDirty) {
+          await drive.renameBook(match.fileId, book.title);
+          await store.markTitleSynced(book.id);
+        } else if (match.title != book.title) {
+          await store.rename(book.id, match.title, fromDrive: true);
+        }
       } else if (book.driveFileId != null &&
           !_transfers.containsKey(book.id) &&
           await drive.isGone(book.driveFileId!)) {
@@ -207,6 +213,12 @@ class LibrarySync extends ChangeNotifier {
       if (_pendingJumps.remove(book.id) != null) notifyListeners();
       _dirtyProgress.add(book.id);
     }
+  }
+
+  /// Renames a book here and, on the next sync, in Drive and on other devices.
+  Future<void> rename(Book book, String title) async {
+    await store.rename(book.id, title);
+    await syncNow();
   }
 
   /// Checks one book's synced position, e.g. right as it's opened.
@@ -297,6 +309,7 @@ class LibrarySync extends ChangeNotifier {
         onProgress: (p) => _progress(transfer, p),
       );
       await store.setDriveFileId(book.id, fileId);
+      await store.markTitleSynced(book.id);
     } finally {
       _transfers.remove(book.id);
       notifyListeners();

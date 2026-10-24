@@ -47,7 +47,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   bool _chrome = true;
 
   /// Desktop layout: whether the contents / pages panel is open.
-  bool _panel = true;
+  bool _panel = false;
   int _panelTab = 0;
 
   /// Page being dragged to on the slider, before letting go.
@@ -450,6 +450,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
           _pageField.selection = TextSelection(baseOffset: 0, extentOffset: _pageField.text.length);
         },
         const SingleActivator(LogicalKeyboardKey.keyB, control: true): () => setState(() => _panel = !_panel),
+        const CharacterActivator('?'): () => showShortcutsDialog(context, _shortcuts),
         if (offer != null) const SingleActivator(LogicalKeyboardKey.keyJ): _acceptJump,
         if (offer != null) const SingleActivator(LogicalKeyboardKey.escape): _declineJump,
       },
@@ -460,6 +461,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
       ),
     );
   }
+
+  static const _shortcuts = [
+    ('← → / PgUp PgDn', 'Previous / next page'),
+    ('Home / End', 'First / last page'),
+    ('Ctrl+G', 'Go to page'),
+    ('Ctrl+= / Ctrl+−', 'Zoom in / out'),
+    ('Ctrl+0', 'Fit width'),
+    ('Ctrl+B', 'Contents panel'),
+    ('J / Esc', 'Jump / stay when another device is ahead'),
+    ('?', 'Show this list'),
+  ];
 
   // --- Touch layout ---------------------------------------------------------
 
@@ -717,6 +729,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       PopupMenuItem(value: ReaderTheme.dark, child: Text('Dark pages')),
                     ],
                   ),
+                  IconButton(
+                    tooltip: 'Keyboard shortcuts (?)',
+                    icon: const Icon(Icons.keyboard_outlined),
+                    onPressed: () => showShortcutsDialog(context, _shortcuts),
+                  ),
                 ],
               ),
             ),
@@ -803,15 +820,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       const SizedBox(width: 10),
                       Text(_remainingText(page, count)),
                     ],
-                    const SizedBox(width: 24),
-                    const Expanded(
-                      child: Text(
-                        '←/→ turn pages   ·   Ctrl+G go to page   ·   Ctrl+0 fit width   ·   Ctrl+B contents',
-                        textAlign: TextAlign.end,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
+                    const Spacer(),
+                    if (count != null) Text('${((page - 1) / (count > 1 ? count - 1 : 1) * 100).round()}% read'),
                   ],
                 ),
               ),

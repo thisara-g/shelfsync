@@ -148,7 +148,7 @@ class LibraryStore extends ChangeNotifier {
     final book = existing ??
         Book(
           id: id,
-          title: p.basenameWithoutExtension(fileName),
+          title: titleFromFileName(fileName),
           fileName: fileName,
           addedAt: DateTime.now(),
         );
@@ -182,6 +182,43 @@ class LibraryStore extends ChangeNotifier {
     );
     await _save();
     notifyListeners();
+  }
+
+  /// Renames a book. [fromDrive] marks a title adopted from Drive, which needs
+  /// no upload; a rename here is pushed to Drive by the next sync.
+  Future<void> rename(String id, String title, {bool fromDrive = false}) async {
+    final book = _books[id];
+    final clean = title.trim();
+    if (book == null || clean.isEmpty) return;
+    if (book.title == clean && (fromDrive || !book.titleDirty)) {
+      if (fromDrive && book.titleDirty) book.titleDirty = false;
+      return;
+    }
+    book
+      ..title = clean
+      ..titleDirty = !fromDrive && book.driveFileId != null;
+    await _save();
+    notifyListeners();
+  }
+
+  /// Drive now has the book's current title.
+  Future<void> markTitleSynced(String id) async {
+    final book = _books[id];
+    if (book == null || !book.titleDirty) return;
+    book.titleDirty = false;
+    await _save();
+    notifyListeners();
+  }
+
+  /// "c-programming_2nd-ed.pdf" → "C programming 2nd ed". Names that already
+  /// contain spaces are kept as they are.
+  static String titleFromFileName(String fileName) {
+    var title = p.basenameWithoutExtension(fileName).trim();
+    if (!title.contains(' ') && RegExp(r'[-_.]').hasMatch(title)) {
+      title = title.replaceAll(RegExp(r'[-_.]+'), ' ').trim();
+    }
+    if (title.isEmpty) return 'Untitled';
+    return title[0].toUpperCase() + title.substring(1);
   }
 
   Future<void> setDriveFileId(String id, String? driveFileId) async {
