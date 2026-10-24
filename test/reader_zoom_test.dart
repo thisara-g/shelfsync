@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -77,6 +78,57 @@ void main() {
     await settle();
     expect(c.pageNumber, 3);
     expect(c.currentZoom, closeTo(fit, 0.01));
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 10));
+    await tester.runAsync(() => tmp.delete(recursive: true));
+  });
+
+  testWidgets('desktop toolbar hides after a pause and returns at the top edge', (tester) async {
+    Pdfrx.pdfiumModulePath = File('build/native_assets/linux/libpdfium.so').absolute.path;
+    final tmp = await tester.runAsync(() => Directory.systemTemp.createTemp('z'));
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(
+      const MethodChannel('plugins.flutter.io/path_provider'),
+      (call) async => tmp!.path,
+    );
+    final store = LibraryStore(Directory(p.join(tmp!.path, 'lib')));
+    await tester.runAsync(() async {
+      await store.load();
+      await store.importFile('test/fixtures/sample.pdf');
+    });
+    final sync = SyncController(_NoAuth());
+    await tester.runAsync(sync.start);
+    tester.view.physicalSize = const Size(1400, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: shelfSyncTheme(),
+        home: ReaderScreen(
+          store: store,
+          librarySync: LibrarySync(store: store, sync: sync),
+          book: store.books.single,
+        ),
+      ),
+    );
+    for (var i = 0; i < 15; i++) {
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+    final zoomIn = find.byTooltip('Zoom in (Ctrl+=)');
+    expect(tester.getTopLeft(zoomIn).dy, greaterThanOrEqualTo(0), reason: 'shown at first');
+
+    await tester.pump(const Duration(seconds: 4));
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(tester.getTopLeft(zoomIn).dy, lessThan(0), reason: 'hidden after a pause');
+
+    final mouse = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await mouse.addPointer(location: const Offset(700, 450));
+    await mouse.moveTo(const Offset(700, 10));
+    await tester.pump(); // starts the slide-in
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(tester.getTopLeft(zoomIn).dy, greaterThanOrEqualTo(0), reason: 'back at the top edge');
+    await mouse.removePointer();
+
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(seconds: 10));
     await tester.runAsync(() => tmp.delete(recursive: true));

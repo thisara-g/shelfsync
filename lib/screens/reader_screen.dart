@@ -78,6 +78,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
   bool _searching = false;
   bool _fullscreen = false;
 
+  /// Desktop: toolbar and footer showing (they auto-hide).
+  bool _bars = true;
+  bool _overBars = false;
+  Timer? _barsTimer;
+
   Size? _viewSize;
   Timer? _resizeTimer;
 
@@ -118,6 +123,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
   void initState() {
     super.initState();
     _alwaysJump = _store.autoJump;
+    _pageFieldFocus.addListener(() {
+      if (_pageFieldFocus.hasFocus) {
+        _showBars();
+      } else {
+        _scheduleBarsHide();
+      }
+    });
     _sync.openBookId = _book.id;
     _sync.addListener(_onSyncChanged);
     _store.addListener(_onStoreChanged);
@@ -136,6 +148,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _saveTimer?.cancel();
     _hideTimer?.cancel();
     _resizeTimer?.cancel();
+    _barsTimer?.cancel();
     _controller.removeListener(_onViewChanged);
     _sync.removeListener(_onSyncChanged);
     _store.removeListener(_onStoreChanged);
@@ -282,6 +295,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _controller.addListener(_onViewChanged);
       _viewerReady = true;
       _onSyncChanged();
+      _scheduleBarsHide();
     });
   }
 
@@ -486,6 +500,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     setState(() {
       _searching = true;
       _chrome = true;
+      _bars = true;
     });
     _searchFocus.requestFocus();
     _searchField.selection = TextSelection(baseOffset: 0, extentOffset: _searchField.text.length);
@@ -494,6 +509,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   void _closeSearch() {
     _searcher?.resetTextSearch();
     setState(() => _searching = false);
+    _scheduleBarsHide();
     _focusNode.requestFocus();
   }
 
@@ -543,6 +559,22 @@ class _ReaderScreenState extends State<ReaderScreen> {
     await Future<void>.delayed(const Duration(milliseconds: 400));
     if (!mounted || !_controller.isReady || _layout == ReaderLayout.scroll) return;
     await _frame(_page ?? 1, fit: true);
+  }
+
+  // --- Desktop bars ---------------------------------------------------------
+
+  void _showBars() {
+    if (!_bars) setState(() => _bars = true);
+    _scheduleBarsHide();
+  }
+
+  /// Hides the toolbar and footer after a pause, unless they're in use.
+  void _scheduleBarsHide() {
+    _barsTimer?.cancel();
+    _barsTimer = Timer(const Duration(seconds: 3), () {
+      if (!mounted || _overBars || _searching || _pageFieldFocus.hasFocus) return;
+      setState(() => _bars = false);
+    });
   }
 
   // --- Touch chrome -----------------------------------------------------------
@@ -1067,281 +1099,320 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final chapter = _outline.chapterAt(page)?.title;
     final document = _document;
     final compact = MediaQuery.sizeOf(context).width < 1100;
-    return Scaffold(
-      backgroundColor: _Chrome.page,
-      body: Column(
+    final toolbar = Container(
+      decoration: const BoxDecoration(
+        color: _Chrome.bar,
+        border: Border(bottom: BorderSide(color: _Chrome.line)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Row(
         children: [
-          if (!_fullscreen)
-            Container(
-              decoration: const BoxDecoration(
-                color: _Chrome.bar,
-                border: Border(bottom: BorderSide(color: _Chrome.line)),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              child: Row(
-                children: [
-                  _ChromeIcon(
-                    tooltip: 'Back to library',
-                    icon: Icons.chevron_left,
-                    size: 22,
-                    onPressed: () => Navigator.maybePop(context),
-                  ),
-                  _ChromeIcon(
-                    tooltip: _panel ? 'Hide contents (Ctrl+B)' : 'Show contents (Ctrl+B)',
-                    icon: Icons.vertical_split_outlined,
-                    active: _panel,
-                    onPressed: () => setState(() => _panel = !_panel),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          _book.title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: _Chrome.text, fontSize: 15, fontWeight: FontWeight.w600),
-                        ),
-                        // Always two lines, so the toolbar (and the page area
-                        // under it) keeps its height when the chapter changes.
-                        Text(
-                          chapter ?? ' ',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(color: _Chrome.muted, fontSize: 13),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  if (count != null) ...[
-                    _Group(
-                      padding: const EdgeInsets.symmetric(horizontal: 6),
-                      children: [
-                        const Text('Page', style: TextStyle(color: _Chrome.muted, fontSize: 14)),
-                        const SizedBox(width: 6),
-                        SizedBox(
-                          width: 52,
-                          height: 28,
-                          child: TextField(
-                            controller: _pageField,
-                            focusNode: _pageFieldFocus,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(color: _Chrome.text, fontSize: 14),
-                            cursorColor: _Chrome.accent,
-                            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                            decoration: InputDecoration(
-                              isDense: true,
-                              filled: true,
-                              fillColor: _Chrome.page,
-                              contentPadding: const EdgeInsets.symmetric(vertical: 6),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(6),
-                                borderSide: const BorderSide(color: _Chrome.selected),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(6),
-                                borderSide: const BorderSide(color: _Chrome.accent),
-                              ),
-                            ),
-                            onSubmitted: (text) {
-                              final target = int.tryParse(text);
-                              if (target != null) _goToPage(target);
-                              _focusNode.requestFocus();
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        Text('of $count', style: const TextStyle(color: _Chrome.muted, fontSize: 14)),
-                        const SizedBox(width: 6),
-                      ],
-                    ),
-                    const SizedBox(width: 8),
-                  ],
-                  _Group(
-                    children: [
-                      _GroupButton(
-                        tooltip: 'Zoom out (Ctrl+−)',
-                        label: '−',
-                        large: true,
-                        onPressed: () => _controller.zoomDown(),
-                      ),
-                      _GroupButton(
-                        tooltip: 'Fit width (Ctrl+0)',
-                        label: compact ? null : 'Fit width',
-                        icon: compact ? Icons.fit_screen_outlined : null,
-                        onPressed: _fitWidth,
-                      ),
-                      _GroupButton(
-                        tooltip: 'Zoom in (Ctrl+=)',
-                        label: '+',
-                        large: true,
-                        onPressed: () => _controller.zoomUp(),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(width: 8),
-                  _Group(
-                    padding: const EdgeInsets.all(4),
-                    children: [
-                      for (final (layout, label, icon) in const [
-                        (ReaderLayout.single, 'Single', Icons.crop_portrait),
-                        (ReaderLayout.spread, 'Two pages', Icons.auto_stories_outlined),
-                      ])
-                        _Segment(
-                          label: compact ? null : label,
-                          icon: compact ? icon : null,
-                          tooltip: label,
-                          selected: _layout == layout,
-                          onPressed: () => _setLayout(layout),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(width: 8),
-                  _ChromeIcon(
-                    tooltip: 'Search in book (Ctrl+F)',
-                    icon: Icons.search,
-                    active: _searching,
-                    onPressed: _openSearch,
-                  ),
-                  _ChromeIcon(
-                    tooltip: 'Page colour: ${_themeName(_store.readerTheme)} (click for ${_themeName(_nextTheme)})',
-                    icon: switch (_store.readerTheme) {
-                      ReaderTheme.light => Icons.light_mode_outlined,
-                      ReaderTheme.dark => Icons.dark_mode_outlined,
-                      ReaderTheme.sepia => Icons.coffee_outlined,
-                    },
-                    onPressed: () => _setTheme(_nextTheme),
-                  ),
-                  _ChromeIcon(tooltip: 'Full screen (F11)', icon: Icons.fullscreen, onPressed: _toggleFullscreen),
-                ],
-              ),
-            ),
-          if (_searching) _searchStrip(background: _Chrome.group),
+          _ChromeIcon(
+            tooltip: 'Back to library',
+            icon: Icons.chevron_left,
+            size: 22,
+            onPressed: () => Navigator.maybePop(context),
+          ),
+          _ChromeIcon(
+            tooltip: _panel ? 'Hide contents (Ctrl+B)' : 'Show contents (Ctrl+B)',
+            icon: Icons.vertical_split_outlined,
+            active: _panel,
+            onPressed: () => setState(() => _panel = !_panel),
+          ),
+          const SizedBox(width: 8),
           Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                if (_panel && document != null && !_fullscreen)
-                  Container(
-                    width: 280,
-                    decoration: const BoxDecoration(
-                      color: _Chrome.panel,
-                      border: Border(right: BorderSide(color: _Chrome.line)),
-                    ),
-                    padding: const EdgeInsets.fromLTRB(10, 14, 10, 0),
-                    child: Column(
-                      children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
-                          child: Row(
-                            children: [
-                              for (final (i, label) in const [(0, 'Contents'), (1, 'Pages'), (2, 'Bookmarks')]) ...[
-                                if (i > 0) const SizedBox(width: 4),
-                                Expanded(
-                                  child: _PanelTab(
-                                    label: label,
-                                    selected: _panelTab == i,
-                                    onPressed: () => setState(() => _panelTab = i),
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          child: switch (_panelTab) {
-                            0 =>
-                              _outline.isEmpty
-                                  ? const _PanelEmpty('This PDF has no table of contents.')
-                                  : _DesktopContents(outline: _outline, page: page, onSelect: _goToPage),
-                            1 => PagesGrid(document: document, page: page, maxExtent: 120, onSelect: _goToPage),
-                            _ => BookmarksList(
-                              pages: _store.bookmarksFor(_book.id),
-                              outline: _outline,
-                              page: page,
-                              onSelect: _goToPage,
-                              onRemove: (p) => _store.toggleBookmark(_book.id, p).then((_) => _sync.syncNow()),
-                              emptyText: 'No bookmarks yet.\nPress Ctrl+D to bookmark a page.',
-                            ),
-                          },
-                        ),
-                      ],
-                    ),
-                  ),
-                Expanded(
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            _onViewSize(constraints.biggest);
-                            return _viewer();
-                          },
-                        ),
-                      ),
-                      if (offer != null)
-                        Positioned(
-                          right: 24,
-                          bottom: 24,
-                          child: ResumeToast(
-                            offer: offer,
-                            alwaysJump: _alwaysJump,
-                            onAlwaysJump: (v) => setState(() => _alwaysJump = v),
-                            onJump: _acceptJump,
-                            onStay: _declineJump,
-                          ),
-                        ),
-                    ],
-                  ),
+                Text(
+                  _book.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: _Chrome.text, fontSize: 15, fontWeight: FontWeight.w600),
+                ),
+                // Always two lines, so the toolbar (and the page area
+                // under it) keeps its height when the chapter changes.
+                Text(
+                  chapter ?? ' ',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: _Chrome.muted, fontSize: 13),
                 ),
               ],
             ),
           ),
-          if (!_fullscreen)
-            Container(
-              decoration: const BoxDecoration(
-                color: _Chrome.bar,
-                border: Border(top: BorderSide(color: _Chrome.line)),
-              ),
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-              child: DefaultTextStyle.merge(
-                style: const TextStyle(color: _Chrome.muted, fontSize: 13),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(2),
-                              child: LinearProgressIndicator(
-                                value: count == null || count < 2 ? 0 : (page - 1) / (count - 1),
-                                minHeight: 4,
-                                color: _Chrome.accent,
-                                backgroundColor: _Chrome.selected,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Text(_percentRead),
-                        ],
+          const SizedBox(width: 8),
+          if (count != null) ...[
+            _Group(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              children: [
+                const Text('Page', style: TextStyle(color: _Chrome.muted, fontSize: 14)),
+                const SizedBox(width: 6),
+                SizedBox(
+                  width: 52,
+                  height: 28,
+                  child: TextField(
+                    controller: _pageField,
+                    focusNode: _pageFieldFocus,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: _Chrome.text, fontSize: 14),
+                    cursorColor: _Chrome.accent,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                    decoration: InputDecoration(
+                      isDense: true,
+                      filled: true,
+                      fillColor: _Chrome.page,
+                      contentPadding: const EdgeInsets.symmetric(vertical: 6),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide: const BorderSide(color: _Chrome.selected),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(6),
+                        borderSide: const BorderSide(color: _Chrome.accent),
                       ),
                     ),
-                    if (!compact) ...[
-                      const SizedBox(width: 18),
-                      const _FooterHint(keys: '← →', text: 'turn pages'),
-                      const _FooterHint(keys: 'Ctrl F', text: 'search'),
-                      const _FooterHint(keys: 'Ctrl D', text: 'bookmark'),
-                      const _FooterHint(keys: 'F11', text: 'full screen'),
-                    ],
+                    onSubmitted: (text) {
+                      final target = int.tryParse(text);
+                      if (target != null) _goToPage(target);
+                      _focusNode.requestFocus();
+                    },
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text('of $count', style: const TextStyle(color: _Chrome.muted, fontSize: 14)),
+                const SizedBox(width: 6),
+              ],
+            ),
+            const SizedBox(width: 8),
+          ],
+          _Group(
+            children: [
+              _GroupButton(
+                tooltip: 'Zoom out (Ctrl+−)',
+                label: '−',
+                large: true,
+                onPressed: () => _controller.zoomDown(),
+              ),
+              _GroupButton(
+                tooltip: 'Fit width (Ctrl+0)',
+                label: compact ? null : 'Fit width',
+                icon: compact ? Icons.fit_screen_outlined : null,
+                onPressed: _fitWidth,
+              ),
+              _GroupButton(tooltip: 'Zoom in (Ctrl+=)', label: '+', large: true, onPressed: () => _controller.zoomUp()),
+            ],
+          ),
+          const SizedBox(width: 8),
+          _Group(
+            padding: const EdgeInsets.all(4),
+            children: [
+              for (final (layout, label, icon) in const [
+                (ReaderLayout.single, 'Single', Icons.crop_portrait),
+                (ReaderLayout.spread, 'Two pages', Icons.auto_stories_outlined),
+              ])
+                _Segment(
+                  label: compact ? null : label,
+                  icon: compact ? icon : null,
+                  tooltip: label,
+                  selected: _layout == layout,
+                  onPressed: () => _setLayout(layout),
+                ),
+            ],
+          ),
+          const SizedBox(width: 8),
+          _ChromeIcon(
+            tooltip: 'Search in book (Ctrl+F)',
+            icon: Icons.search,
+            active: _searching,
+            onPressed: _openSearch,
+          ),
+          _ChromeIcon(
+            tooltip: 'Page colour: ${_themeName(_store.readerTheme)} (click for ${_themeName(_nextTheme)})',
+            icon: switch (_store.readerTheme) {
+              ReaderTheme.light => Icons.light_mode_outlined,
+              ReaderTheme.dark => Icons.dark_mode_outlined,
+              ReaderTheme.sepia => Icons.coffee_outlined,
+            },
+            onPressed: () => _setTheme(_nextTheme),
+          ),
+          _ChromeIcon(tooltip: 'Full screen (F11)', icon: Icons.fullscreen, onPressed: _toggleFullscreen),
+        ],
+      ),
+    );
+    final body = Row(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (_panel && document != null && !_fullscreen)
+          Container(
+            width: 280,
+            decoration: const BoxDecoration(
+              color: _Chrome.panel,
+              border: Border(right: BorderSide(color: _Chrome.line)),
+            ),
+            child: AnimatedPadding(
+              duration: const Duration(milliseconds: 200),
+              // Clear of the toolbar and footer while they show.
+              padding: EdgeInsets.fromLTRB(10, _bars ? 76 : 14, 10, _bars ? 40 : 0),
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(4, 0, 4, 12),
+                    child: Row(
+                      children: [
+                        for (final (i, label) in const [(0, 'Contents'), (1, 'Pages'), (2, 'Bookmarks')]) ...[
+                          if (i > 0) const SizedBox(width: 4),
+                          Expanded(
+                            child: _PanelTab(
+                              label: label,
+                              selected: _panelTab == i,
+                              onPressed: () => setState(() => _panelTab = i),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: switch (_panelTab) {
+                      0 =>
+                        _outline.isEmpty
+                            ? const _PanelEmpty('This PDF has no table of contents.')
+                            : _DesktopContents(outline: _outline, page: page, onSelect: _goToPage),
+                      1 => PagesGrid(document: document, page: page, maxExtent: 120, onSelect: _goToPage),
+                      _ => BookmarksList(
+                        pages: _store.bookmarksFor(_book.id),
+                        outline: _outline,
+                        page: page,
+                        onSelect: _goToPage,
+                        onRemove: (p) => _store.toggleBookmark(_book.id, p).then((_) => _sync.syncNow()),
+                        emptyText: 'No bookmarks yet.\nPress Ctrl+D to bookmark a page.',
+                      ),
+                    },
+                  ),
+                ],
+              ),
+            ),
+          ),
+        Expanded(
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    _onViewSize(constraints.biggest);
+                    return _viewer();
+                  },
+                ),
+              ),
+              if (offer != null)
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 200),
+                  right: 24,
+                  bottom: _bars ? 64 : 24,
+                  child: ResumeToast(
+                    offer: offer,
+                    alwaysJump: _alwaysJump,
+                    onAlwaysJump: (v) => setState(() => _alwaysJump = v),
+                    onJump: _acceptJump,
+                    onStay: _declineJump,
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
+    final footer = Container(
+      decoration: const BoxDecoration(
+        color: _Chrome.bar,
+        border: Border(top: BorderSide(color: _Chrome.line)),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+      child: DefaultTextStyle.merge(
+        style: const TextStyle(color: _Chrome.muted, fontSize: 13),
+        child: Row(
+          children: [
+            Expanded(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(2),
+                      child: LinearProgressIndicator(
+                        value: count == null || count < 2 ? 0 : (page - 1) / (count - 1),
+                        minHeight: 4,
+                        color: _Chrome.accent,
+                        backgroundColor: _Chrome.selected,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(_percentRead),
+                ],
+              ),
+            ),
+            if (!compact) ...[
+              const SizedBox(width: 18),
+              const _FooterHint(keys: '← →', text: 'turn pages'),
+              const _FooterHint(keys: 'Ctrl F', text: 'search'),
+              const _FooterHint(keys: 'Ctrl D', text: 'bookmark'),
+              const _FooterHint(keys: 'F11', text: 'full screen'),
+            ],
+          ],
+        ),
+      ),
+    );
+    // Toolbar and footer float over the page and hide after a few seconds;
+    // moving the pointer to the top or bottom edge brings them back.
+    return Scaffold(
+      backgroundColor: _Chrome.page,
+      body: MouseRegion(
+        onHover: (event) {
+          final height = MediaQuery.sizeOf(context).height;
+          if (event.localPosition.dy < 80 || event.localPosition.dy > height - 60) _showBars();
+        },
+        child: Stack(
+          children: [
+            Positioned.fill(child: body),
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 200),
+              left: 0,
+              right: 0,
+              top: _bars ? 0 : -160,
+              child: MouseRegion(
+                onEnter: (_) => _overBars = true,
+                onExit: (_) {
+                  _overBars = false;
+                  _scheduleBarsHide();
+                },
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    toolbar,
+                    if (_searching) _searchStrip(background: _Chrome.group),
                   ],
                 ),
               ),
             ),
-        ],
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 200),
+              left: 0,
+              right: 0,
+              bottom: _bars ? 0 : -60,
+              child: MouseRegion(
+                onEnter: (_) => _overBars = true,
+                onExit: (_) {
+                  _overBars = false;
+                  _scheduleBarsHide();
+                },
+                child: footer,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
