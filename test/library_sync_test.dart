@@ -438,6 +438,21 @@ void main() {
       expect(synced.bookIds, {id});
     });
 
+    test('bookmarks reach the other device', () async {
+      await pc.store.importFile(pdf.path);
+      final id = pc.store.books.single.id;
+      expect(await pc.store.toggleBookmark(id, 214), isTrue);
+      await pc.library.syncNow();
+      await tablet.library.syncNow();
+      expect(tablet.store.bookmarksFor(id), [214]);
+
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(await tablet.store.toggleBookmark(id, 214), isFalse);
+      await tablet.library.syncNow();
+      await pc.library.syncNow();
+      expect(pc.store.bookmarksFor(id), isEmpty);
+    });
+
     test('the newest edit wins', () async {
       await pc.store.createShelf('Novels');
       await pc.library.syncNow();

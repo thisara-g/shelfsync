@@ -17,6 +17,9 @@ enum ImportResult { added, duplicate }
 /// How the reader colours pages.
 enum ReaderTheme { light, sepia, dark }
 
+/// How the desktop reader lays out pages.
+enum ReaderLayout { scroll, single, spread }
+
 /// Persists the library as `library.json` plus one `books/<id>.pdf` per book
 /// under [rootDir].
 class LibraryStore extends ChangeNotifier {
@@ -25,12 +28,13 @@ class LibraryStore extends ChangeNotifier {
   final Directory rootDir;
   final Map<String, Book> _books = {};
   final List<Shelf> _shelves = [];
+  final Map<String, Set<int>> _bookmarks = {};
   DateTime? _shelvesUpdatedAt;
   bool _shelvesDirty = false;
   ReaderTheme _readerTheme = ReaderTheme.light;
   bool _autoJump = false;
   bool _welcomeDone = false;
-  bool _twoPageSpread = false;
+  ReaderLayout _readerLayout = ReaderLayout.scroll;
   String? _syncAccount;
   String _deviceId = '';
   String _deviceName = '';
@@ -50,8 +54,8 @@ class LibraryStore extends ChangeNotifier {
   /// Whether the first-run welcome screen has been dismissed.
   bool get welcomeDone => _welcomeDone;
 
-  /// Desktop reader shows facing pages side by side.
-  bool get twoPageSpread => _twoPageSpread;
+  /// Desktop reader page layout.
+  ReaderLayout get readerLayout => _readerLayout;
 
   File get _indexFile => File(p.join(rootDir.path, 'library.json'));
   Directory get _booksDir => Directory(p.join(rootDir.path, 'books'));
@@ -82,8 +86,26 @@ class LibraryStore extends ChangeNotifier {
   /// Changed here since the last upload.
   bool get shelvesDirty => _shelvesDirty;
 
-  ShelvesDocument get shelvesDocument =>
-      ShelvesDocument(shelves: _shelves, updated: _shelvesUpdatedAt ?? DateTime.fromMillisecondsSinceEpoch(0));
+  ShelvesDocument get shelvesDocument => ShelvesDocument(
+        shelves: _shelves,
+        bookmarks: _bookmarks,
+        updated: _shelvesUpdatedAt ?? DateTime.fromMillisecondsSinceEpoch(0),
+      );
+
+  /// Bookmarked pages of a book, in page order.
+  List<int> bookmarksFor(String bookId) => (_bookmarks[bookId]?.toList() ?? <int>[])..sort();
+
+  bool isBookmarked(String bookId, int page) => _bookmarks[bookId]?.contains(page) ?? false;
+
+  /// Adds or removes a bookmark; returns whether the page is now bookmarked.
+  Future<bool> toggleBookmark(String bookId, int page) async {
+    final pages = _bookmarks.putIfAbsent(bookId, () => {});
+    final added = pages.add(page);
+    if (!added) pages.remove(page);
+    if (pages.isEmpty) _bookmarks.remove(bookId);
+    await _shelvesChanged();
+    return added;
+  }
 
   File fileFor(Book book) => File(p.join(_booksDir.path, '${book.id}.pdf'));
 
@@ -99,7 +121,8 @@ class LibraryStore extends ChangeNotifier {
       _readerTheme = ReaderTheme.values.asNameMap()[settings['readerTheme']] ??
           (settings['darkReader'] == true ? ReaderTheme.dark : ReaderTheme.light);
       _autoJump = settings['autoJump'] as bool? ?? false;
-      _twoPageSpread = settings['twoPageSpread'] as bool? ?? false;
+      _readerLayout = ReaderLayout.values.asNameMap()[settings['readerLayout']] ??
+          (settings['twoPageSpread'] == true ? ReaderLayout.spread : ReaderLayout.scroll);
       // Existing users (from 0.1) already know the app: skip the welcome.
       _welcomeDone = settings['welcomeDone'] as bool? ?? true;
       _syncAccount = settings['syncAccount'] as String?;
@@ -107,9 +130,11 @@ class LibraryStore extends ChangeNotifier {
       _deviceName = settings['deviceName'] as String? ?? '';
       final shelves = json['shelves'] as Map<String, dynamic>?;
       _shelves.clear();
+      _bookmarks.clear();
       if (shelves != null) {
         final doc = ShelvesDocument.fromJson(shelves);
         _shelves.addAll(doc.shelves);
+        _bookmarks.addAll(doc.bookmarks);
         _shelvesUpdatedAt = doc.updated.millisecondsSinceEpoch == 0 ? null : doc.updated;
         _shelvesDirty = shelves['dirty'] as bool? ?? false;
       }
@@ -152,7 +177,7 @@ class LibraryStore extends ChangeNotifier {
         'readerTheme': _readerTheme.name,
         'autoJump': _autoJump,
         'welcomeDone': _welcomeDone,
-        'twoPageSpread': _twoPageSpread,
+        'readerLayout': _readerLayout.name,
         'syncAccount': _syncAccount,
         'deviceId': _deviceId,
         'deviceName': _deviceName,
@@ -351,6 +376,9 @@ class LibraryStore extends ChangeNotifier {
     _shelves
       ..clear()
       ..addAll(doc.shelves);
+    _bookmarks
+      ..clear()
+      ..addAll({for (final e in doc.bookmarks.entries) e.key: {...e.value}});
     _shelvesUpdatedAt = doc.updated;
     _shelvesDirty = false;
     await _save();
@@ -384,9 +412,9 @@ class LibraryStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setTwoPageSpread(bool value) async {
-    if (_twoPageSpread == value) return;
-    _twoPageSpread = value;
+  Future<void> setReaderLayout(ReaderLayout value) async {
+    if (_readerLayout == value) return;
+    _readerLayout = value;
     await _save();
     notifyListeners();
   }

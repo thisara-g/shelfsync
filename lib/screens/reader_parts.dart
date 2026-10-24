@@ -490,3 +490,63 @@ class ResumeToast extends StatelessWidget {
     );
   }
 }
+
+/// Bookmarked pages with the section each falls in.
+class BookmarksList extends StatelessWidget {
+  const BookmarksList({
+    super.key,
+    required this.pages,
+    required this.outline,
+    required this.page,
+    required this.onSelect,
+    required this.onRemove,
+    this.emptyText = 'No bookmarks yet. Tap the bookmark button to save a page.',
+  });
+
+  final List<int> pages;
+  final Outline outline;
+  final int page;
+  final ValueChanged<int> onSelect;
+  final ValueChanged<int> onRemove;
+  final String emptyText;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    if (pages.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            emptyText,
+            textAlign: TextAlign.center,
+            style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+          ),
+        ),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      itemCount: pages.length,
+      itemBuilder: (context, i) {
+        final p = pages[i];
+        final section = outline.sectionAt(p)?.title;
+        return ListTile(
+          dense: true,
+          selected: p == page,
+          selectedTileColor: theme.colorScheme.secondaryContainer,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          leading: Icon(Icons.bookmark, color: theme.colorScheme.primary, size: 20),
+          title: Text('Page $p'),
+          subtitle: section == null ? null : Text(section, maxLines: 1, overflow: TextOverflow.ellipsis),
+          trailing: IconButton(
+            tooltip: 'Remove bookmark',
+            icon: const Icon(Icons.close, size: 18),
+            onPressed: () => onRemove(p),
+          ),
+          onTap: () => onSelect(p),
+        );
+      },
+    );
+  }
+}

@@ -39,22 +39,33 @@ const shelfColors = [
   0xFFEC407A, // pink
 ];
 
-/// All shelves as one synced document; the newest edit wins.
+/// Shelves and bookmarks as one synced document; the newest edit wins.
 class ShelvesDocument {
-  const ShelvesDocument({required this.shelves, required this.updated});
+  const ShelvesDocument({required this.shelves, required this.updated, this.bookmarks = const {}});
 
   final List<Shelf> shelves;
+
+  /// Bookmarked pages by book id.
+  final Map<String, Set<int>> bookmarks;
   final DateTime updated;
 
   static const fileName = 'shelves.json';
 
   factory ShelvesDocument.fromJson(Map<String, dynamic> json) => ShelvesDocument(
         shelves: [for (final s in json['shelves'] as List<dynamic>? ?? const []) Shelf.fromJson(s as Map<String, dynamic>)],
+        bookmarks: {
+          for (final e in (json['bookmarks'] as Map<String, dynamic>? ?? const {}).entries)
+            e.key: {for (final p in e.value as List<dynamic>) p as int},
+        },
         updated: DateTime.fromMillisecondsSinceEpoch(json['updated_ms'] as int? ?? 0),
       );
 
   Map<String, dynamic> toJson() => {
         'updated_ms': updated.millisecondsSinceEpoch,
         'shelves': [for (final s in shelves) s.toJson()],
+        'bookmarks': {
+          for (final e in bookmarks.entries)
+            if (e.value.isNotEmpty) e.key: e.value.toList()..sort(),
+        },
       };
 }

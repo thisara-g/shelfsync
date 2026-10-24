@@ -82,14 +82,14 @@ void main() {
     await store.setWelcomeDone();
     await store.setReaderTheme(ReaderTheme.sepia);
     await store.setAutoJump(true);
-    await store.setTwoPageSpread(true);
+    await store.setReaderLayout(ReaderLayout.single);
 
     final reloaded = LibraryStore(dir);
     await reloaded.load();
     expect(reloaded.welcomeDone, isTrue);
     expect(reloaded.readerTheme, ReaderTheme.sepia);
     expect(reloaded.autoJump, isTrue);
-    expect(reloaded.twoPageSpread, isTrue);
+    expect(reloaded.readerLayout, ReaderLayout.single);
   });
 
   test('a 0.1 library keeps dark pages and skips the welcome', () async {

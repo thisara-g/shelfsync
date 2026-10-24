@@ -815,7 +815,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     ],
                   ),
                 ),
-                const _LibraryFooter(),
               ],
             ),
           ),
@@ -1387,47 +1386,6 @@ class _DesktopTileState extends State<_DesktopTile> {
             ),
           ),
         ),
-      ),
-    );
-  }
-}
-
-/// Hints along the bottom of the desktop library.
-class _LibraryFooter extends StatelessWidget {
-  const _LibraryFooter();
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final muted = theme.colorScheme.onSurfaceVariant;
-    Widget hint(String keys, String text) => Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-          decoration: BoxDecoration(color: const Color(0xFFEEF0EF), borderRadius: BorderRadius.circular(4)),
-          child: Text(keys, style: TextStyle(fontSize: 13, color: muted)),
-        ),
-        const SizedBox(width: 6),
-        Text(text, style: TextStyle(fontSize: 13, color: muted)),
-      ],
-    );
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 40),
-      padding: const EdgeInsets.only(top: 16, bottom: 18),
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: Color(0xFFE1E5E3))),
-      ),
-      child: Wrap(
-        spacing: 20,
-        runSpacing: 8,
-        crossAxisAlignment: WrapCrossAlignment.center,
-        children: [
-          Text('Drop PDFs anywhere in this window to add them', style: TextStyle(fontSize: 13, color: muted)),
-          hint('Ctrl O', 'open file'),
-          hint('Enter', 'open selected'),
-          hint('Del', 'remove download'),
-        ],
       ),
     );
   }
