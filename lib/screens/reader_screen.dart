@@ -45,7 +45,8 @@ class ReaderScreen extends StatefulWidget {
 
 class _ReaderScreenState extends State<ReaderScreen> {
   final _controller = PdfViewerController();
-  late final _searcher = PdfTextSearcher(_controller)..addListener(_onSearchChanged);
+  /// Find-in-book; needs a loaded document, so it's created per viewer load.
+  PdfTextSearcher? _searcher;
   final _focusNode = FocusNode();
   final _pageField = TextEditingController();
   final _pageFieldFocus = FocusNode();
@@ -120,7 +121,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _store.removeListener(_onStoreChanged);
     if (_sync.openBookId == _book.id) _sync.openBookId = null;
     _imageRegions?.dispose();
-    _searcher.dispose();
+    _searcher?.dispose();
     _saveProgress();
     _focusNode.dispose();
     _pageField.dispose();
@@ -235,6 +236,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
       },
     );
     _document = document;
+    _searcher?.dispose();
+    _searcher = PdfTextSearcher(controller)..addListener(_onSearchChanged);
+    if (_searching && _searchField.text.trim().isNotEmpty) _searcher!.startTextSearch(_searchField.text.trim());
     final page = controller.pageNumber ?? _page ?? _book.lastPage;
     setState(() {
       _pageCount = document.pages.length;
@@ -361,7 +365,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   void _closeSearch() {
-    _searcher.resetTextSearch();
+    _searcher?.resetTextSearch();
     setState(() => _searching = false);
     _focusNode.requestFocus();
   }
@@ -371,20 +375,23 @@ class _ReaderScreenState extends State<ReaderScreen> {
   }
 
   void _search(String text) {
+    final searcher = _searcher;
+    if (searcher == null) return;
     if (text.trim().isEmpty) {
-      _searcher.resetTextSearch();
+      searcher.resetTextSearch();
     } else {
-      _searcher.startTextSearch(text.trim());
+      searcher.startTextSearch(text.trim());
     }
   }
 
   String get _searchStatus {
-    if (_searchField.text.trim().isEmpty) return '';
-    final count = _searcher.matches.length;
-    final index = _searcher.currentIndex;
-    if (_searcher.isSearching && count == 0) return 'Searching…';
+    final searcher = _searcher;
+    if (searcher == null || _searchField.text.trim().isEmpty) return '';
+    final count = searcher.matches.length;
+    final index = searcher.currentIndex;
+    if (searcher.isSearching && count == 0) return 'Searching…';
     if (count == 0) return 'No matches';
-    final suffix = _searcher.isSearching ? '+' : '';
+    final suffix = searcher.isSearching ? '+' : '';
     return index == null ? '$count$suffix matches' : '${index + 1} of $count$suffix';
   }
 
@@ -543,6 +550,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
+  void _paintSearchMatches(Canvas canvas, Rect pageRect, PdfPage page) =>
+      _searcher?.pageTextMatchPaintCallback(canvas, pageRect, page);
+
   // --- Build ----------------------------------------------------------------
 
   Widget _viewer() {
@@ -569,7 +579,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
             ReaderTheme.sepia => _paintSepiaPage,
             ReaderTheme.dark => _paintDarkPage,
           },
-          _searcher.pageTextMatchPaintCallback,
+          _paintSearchMatches,
         ],
         onViewerReady: _onViewerReady,
         onPageChanged: _onPageChanged,
@@ -697,9 +707,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 onChanged: _search,
                 onSubmitted: (_) {
                   if (HardwareKeyboard.instance.isShiftPressed) {
-                    _searcher.goToPrevMatch();
+                    _searcher?.goToPrevMatch();
                   } else {
-                    _searcher.goToNextMatch();
+                    _searcher?.goToNextMatch();
                   }
                   _searchFocus.requestFocus();
                 },
@@ -710,13 +720,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
               tooltip: 'Previous match (Shift+Enter)',
               color: _Chrome.text,
               icon: const Icon(Icons.keyboard_arrow_up),
-              onPressed: _searcher.hasMatches ? () => _searcher.goToPrevMatch() : null,
+              onPressed: _searcher?.hasMatches == true ? () => _searcher?.goToPrevMatch() : null,
             ),
             IconButton(
               tooltip: 'Next match (Enter)',
               color: _Chrome.text,
               icon: const Icon(Icons.keyboard_arrow_down),
-              onPressed: _searcher.hasMatches ? () => _searcher.goToNextMatch() : null,
+              onPressed: _searcher?.hasMatches == true ? () => _searcher?.goToNextMatch() : null,
             ),
             IconButton(
               tooltip: 'Close (Esc)',
