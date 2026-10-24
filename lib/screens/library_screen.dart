@@ -329,7 +329,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 if (store.shelves.isEmpty)
                   const Padding(
                     padding: EdgeInsets.only(bottom: 8),
-                    child: Text('No shelves yet. Shelves group books, like "Semester 8" or "Novels".'),
+                    child: Text('No shelves yet. Shelves group books, like "Textbooks" or "Novels".'),
                   ),
                 for (final shelf in store.shelves)
                   CheckboxListTile(

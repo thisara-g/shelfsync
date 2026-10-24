@@ -82,7 +82,7 @@ that app when Android asks.
 | **Continue reading** | The top of the library shows what you're reading on any device, where you were and when. One tap or click to continue. |
 | **Find books** | Search, filter (Reading, Finished, In Drive, On this device) and sort. On Linux the sidebar holds the filters and Ctrl+K jumps to search. |
 | **Books from your other device** | Shown with a cloud badge. Tap one to download and open it. |
-| **Shelves** | Group books into shelves ("Semester 8", "Novels"). Create them from the sidebar (Linux) or the pills (tablet); drag a cover onto a shelf or use a book's **Shelves…** menu. Shelves sync between devices. |
+| **Shelves** | Group books into shelves ("Textbooks", "Novels"). Create them from the sidebar (Linux) or the pills (tablet); drag a cover onto a shelf or use a book's **Shelves…** menu. Shelves sync between devices. |
 | **Reader (tablet)** | Tap the page to show or hide the controls. Drag the slider to move through the book (ticks mark chapters). Search, contents/pages/bookmarks and the bookmark button are in the top bar. |
 | **Reader (Linux)** | **Single** (one whole page at a time) or **Two pages** (both always fit). ↑/↓ scroll and carry on to the next or previous page; ←/→ and PgUp/PgDn turn pages. Side panel with contents, page thumbnails and bookmarks (Ctrl+B). Search (Ctrl+F), bookmark (Ctrl+D), go to page (Ctrl+G), zoom and **Fit width** (Ctrl+0), full screen (F11). Press ? for all shortcuts. |
 | **Bookmarks** | Bookmarked pages sync between devices along with shelves. |

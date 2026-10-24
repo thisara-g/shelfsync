@@ -1,4 +1,4 @@
-/// A user-made collection of books, e.g. "Semester 8".
+/// A user-made collection of books, e.g. "Textbooks".
 class Shelf {
   Shelf({required this.id, required this.name, required this.color, Set<String>? bookIds})
       : bookIds = bookIds ?? {};

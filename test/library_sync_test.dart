@@ -427,14 +427,14 @@ void main() {
     test('a shelf and its books reach the other device', () async {
       await pc.store.importFile(pdf.path);
       final id = pc.store.books.single.id;
-      final shelf = await pc.store.createShelf('Semester 8');
+      final shelf = await pc.store.createShelf('Textbooks');
       await pc.store.setOnShelf(shelf.id, id, true);
       await pc.library.syncNow();
       expect(pc.store.shelvesDirty, isFalse);
 
       await tablet.library.syncNow();
       final synced = tablet.store.shelves.single;
-      expect(synced.name, 'Semester 8');
+      expect(synced.name, 'Textbooks');
       expect(synced.bookIds, {id});
     });
 
