@@ -83,6 +83,17 @@ void main() {
     // Full screen zooms in (half-width bars); ← fits the page again.
     await tester.sendKeyEvent(LogicalKeyboardKey.f11);
     await settle();
+    expect(find.byTooltip('Exit full screen (F11)'), findsOneWidget);
+    Future<void> ctrlB() async {
+      await tester.sendKeyDownEvent(LogicalKeyboardKey.control);
+      await tester.sendKeyEvent(LogicalKeyboardKey.keyB);
+      await tester.sendKeyUpEvent(LogicalKeyboardKey.control);
+      await settle();
+    }
+
+    await ctrlB();
+    expect(find.text('Bookmarks'), findsOneWidget, reason: 'contents panel opens in full screen');
+    await ctrlB();
     expect(c.currentZoom, greaterThan(fit * 1.05));
     await tester.sendKeyEvent(LogicalKeyboardKey.arrowLeft);
     await settle();

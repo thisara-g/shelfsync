@@ -1325,14 +1325,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
             },
             onPressed: () => _setTheme(_nextTheme),
           ),
-          _ChromeIcon(tooltip: 'Full screen (F11)', icon: Icons.fullscreen, onPressed: _toggleFullscreen),
+          _ChromeIcon(
+            tooltip: _fullscreen ? 'Exit full screen (F11)' : 'Full screen (F11)',
+            icon: _fullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+            onPressed: _toggleFullscreen,
+          ),
         ],
       ),
     );
     final body = Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (_panel && document != null && !_fullscreen)
+        if (_panel && document != null)
           Container(
             width: 280,
             decoration: const BoxDecoration(
