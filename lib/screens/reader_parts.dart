@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:pdfrx/pdfrx.dart';
 
@@ -90,7 +92,12 @@ PdfPageLayout spreadLayout(List<PdfPage> pages, PdfViewerParams params) {
       rects[0] = Rect.fromLTWH(centre + m / 2, y + (height - p.height) / 2, p.width, p.height);
     } else {
       final left = pages[row[0]];
-      rects[row[0]] = Rect.fromLTWH(centre - m / 2 - left.width, y + (height - left.height) / 2, left.width, left.height);
+      rects[row[0]] = Rect.fromLTWH(
+        centre - m / 2 - left.width,
+        y + (height - left.height) / 2,
+        left.width,
+        left.height,
+      );
       if (row.length > 1) {
         final right = pages[row[1]];
         rects[row[1]] = Rect.fromLTWH(centre + m / 2, y + (height - right.height) / 2, right.width, right.height);
@@ -99,6 +106,15 @@ PdfPageLayout spreadLayout(List<PdfPage> pages, PdfViewerParams params) {
     y += height + m;
   }
   return PdfPageLayout(pageLayouts: rects, documentSize: Size(width, y));
+}
+
+/// Zoom that shows all of [rect] in [view]. With [halveBars] (full screen) it
+/// zooms in further so the empty bars beside the page are half as wide.
+double frameZoom(Rect rect, Size view, double margin, {bool halveBars = false}) {
+  final fit = math.min((view.width - margin * 2) / rect.width, (view.height - margin * 2) / rect.height);
+  if (!halveBars) return fit;
+  final bars = view.width - rect.width * fit;
+  return math.max(fit, (view.width - bars / 2) / rect.width);
 }
 
 /// First page of the spread row that contains [page].
@@ -186,7 +202,10 @@ class PagesGrid extends StatelessWidget {
                 child: DecoratedBox(
                   decoration: BoxDecoration(
                     color: Colors.white,
-                    border: Border.all(color: selected ? scheme.primary : scheme.outlineVariant, width: selected ? 3 : 1),
+                    border: Border.all(
+                      color: selected ? scheme.primary : scheme.outlineVariant,
+                      width: selected ? 3 : 1,
+                    ),
                   ),
                   child: PdfPageView(document: document, pageNumber: number, maximumDpi: 48),
                 ),
@@ -241,7 +260,10 @@ class PageColourPicker extends StatelessWidget {
                 onTap: () => onChanged(theme),
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-                  child: Text(label, style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+                  child: Text(
+                    label,
+                    style: TextStyle(color: fg, fontWeight: FontWeight.w600),
+                  ),
                 ),
               ),
             ),
@@ -259,10 +281,7 @@ class ResumeOffer {
   final int currentPage;
   final String? section;
 
-  String get where => [
-        'Page ${record.page}',
-        ?section,
-      ].join(' · ');
+  String get where => ['Page ${record.page}', ?section].join(' · ');
 }
 
 /// Tablet: a bottom sheet over a dimmed page.
@@ -342,10 +361,16 @@ class ResumeSheet extends StatelessWidget {
                                 const SizedBox(height: 8),
                                 Text(
                                   'Pick up where you left off?',
-                                  style: theme.textTheme.headlineSmall?.copyWith(fontFamily: serifFamily, fontWeight: FontWeight.w600),
+                                  style: theme.textTheme.headlineSmall?.copyWith(
+                                    fontFamily: serifFamily,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                                 const SizedBox(height: 6),
-                                Text(offer.where, style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurfaceVariant)),
+                                Text(
+                                  offer.where,
+                                  style: theme.textTheme.bodyLarge?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                                ),
                               ],
                             ),
                           ),
@@ -364,7 +389,10 @@ class ResumeSheet extends StatelessWidget {
                           Expanded(
                             child: SizedBox(
                               height: 54,
-                              child: OutlinedButton(onPressed: onStay, child: Text('Stay on page ${offer.currentPage}')),
+                              child: OutlinedButton(
+                                onPressed: onStay,
+                                child: Text('Stay on page ${offer.currentPage}'),
+                              ),
                             ),
                           ),
                         ],
@@ -431,7 +459,10 @@ class ResumeToast extends StatelessWidget {
                     Container(
                       width: 40,
                       height: 40,
-                      decoration: BoxDecoration(color: const Color(0xFF1F3B38), borderRadius: BorderRadius.circular(12)),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1F3B38),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                       child: const Icon(Icons.devices_outlined, color: Color(0xFF4DB6AC), size: 22),
                     ),
                     const SizedBox(width: 14),
@@ -444,7 +475,10 @@ class ResumeToast extends StatelessWidget {
                             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                           ),
                           const SizedBox(height: 2),
-                          Text('${offer.where} · ${timeAgo(record.updated)}', style: const TextStyle(fontSize: 14, color: muted)),
+                          Text(
+                            '${offer.where} · ${timeAgo(record.updated)}',
+                            style: const TextStyle(fontSize: 14, color: muted),
+                          ),
                         ],
                       ),
                     ),

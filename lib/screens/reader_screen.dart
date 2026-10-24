@@ -45,6 +45,7 @@ class ReaderScreen extends StatefulWidget {
 
 class _ReaderScreenState extends State<ReaderScreen> {
   final _controller = PdfViewerController();
+
   /// Find-in-book; needs a loaded document, so it's created per viewer load.
   PdfTextSearcher? _searcher;
   final _focusNode = FocusNode();
@@ -75,6 +76,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   bool _searching = false;
   bool _fullscreen = false;
+
+  /// Scroll-mode zoom before entering full screen, restored on leaving it.
+  double? _zoomBeforeFullscreen;
+  Size? _viewSize;
+  Timer? _resizeTimer;
 
   /// Page being dragged to on the slider, before letting go.
   double? _sliderPage;
@@ -116,6 +122,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   void dispose() {
     _saveTimer?.cancel();
     _hideTimer?.cancel();
+    _resizeTimer?.cancel();
     _controller.removeListener(_onViewChanged);
     _sync.removeListener(_onSyncChanged);
     _store.removeListener(_onStoreChanged);
@@ -181,7 +188,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final record = await _sync.acceptJump(_book.id);
     if (record == null || !mounted || !_controller.isReady) return;
     final offset = record.pageOffset;
-    if (offset == null || _layout == ReaderLayout.single) {
+    if (offset == null || _layout != ReaderLayout.scroll) {
       await _showPage(record.page);
     } else {
       await _goToPosition(record.page, offset);
@@ -252,7 +259,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         if (outline.isEmpty && _panelTab == 0) _panelTab = 1;
       });
     });
-    final restore = _layout == ReaderLayout.single ? _showPage(page) : _restoreExactPosition();
+    final restore = _layout == ReaderLayout.scroll ? _restoreExactPosition() : _frame(page);
     restore.whenComplete(() {
       if (!mounted) return;
       _controller.addListener(_onViewChanged);
@@ -283,14 +290,58 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   // --- Navigation -----------------------------------------------------------
 
-  /// Shows a whole page in Single mode, otherwise scrolls to its top.
+  /// Single / Two pages: frames the page (or both facing pages). Scroll:
+  /// scrolls to the page's top.
   Future<void> _showPage(int page) async {
     final count = _pageCount;
     if (count == null || !_controller.isReady) return;
-    await _controller.goToPage(
-      pageNumber: page.clamp(1, count),
-      anchor: _layout == ReaderLayout.single ? PdfPageAnchor.all : null,
-    );
+    final target = page.clamp(1, count);
+    if (_layout == ReaderLayout.scroll) {
+      await _controller.goToPage(pageNumber: target);
+    } else {
+      await _frame(target);
+    }
+  }
+
+  /// The page, or in Two pages the facing pair that contains it.
+  Rect _frameRect(int page) {
+    final layouts = _controller.layout.pageLayouts;
+    if (!_spread) return layouts[page - 1];
+    final start = spreadRowStart(page);
+    var rect = layouts[start - 1];
+    if (start > 1 && start < layouts.length) rect = rect.expandToInclude(layouts[start]);
+    return rect;
+  }
+
+  /// Zooms to frame [page]; if it's then taller than the window, shows its
+  /// top (or keeps the current vertical position with [keepY]).
+  Future<void> _frame(int page, {bool keepY = false}) async {
+    if (!_controller.isReady || page < 1 || page > _controller.pageCount) return;
+    final rect = _frameRect(page);
+    final view = _controller.viewSize;
+    final margin = _controller.params.margin;
+    final zoom = frameZoom(rect, view, margin, halveBars: _fullscreen && !_spread);
+    final Offset position;
+    if (rect.height * zoom <= view.height - margin * 2 + 1) {
+      position = rect.center;
+    } else if (keepY) {
+      position = Offset(rect.center.dx, _controller.visibleRect.center.dy);
+    } else {
+      position = rect.topCenter.translate(0, (view.height / 2 - margin) / zoom);
+    }
+    await _controller.goTo(_controller.calcMatrixFor(position, zoom: zoom, viewSize: view));
+  }
+
+  /// Keeps Single / Two pages framed when the window changes size.
+  void _onViewSize(Size size) {
+    if (size == _viewSize) return;
+    final first = _viewSize == null;
+    _viewSize = size;
+    if (first || _layout == ReaderLayout.scroll) return;
+    _resizeTimer?.cancel();
+    _resizeTimer = Timer(const Duration(milliseconds: 150), () {
+      if (mounted && _viewerReady) _frame(_page ?? 1);
+    });
   }
 
   Future<void> _goToPage(int page) => _showPage(page);
@@ -342,7 +393,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       setState(() => _viewerGeneration++);
     } else {
       setState(() {});
-      if (layout == ReaderLayout.single) await _showPage(_page ?? 1);
+      if (layout != ReaderLayout.scroll) await _frame(_page ?? 1);
     }
     _focusNode.requestFocus();
   }
@@ -405,11 +456,26 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Future<void> _toggleFullscreen() async {
     final on = !_fullscreen;
+    if (on && _layout == ReaderLayout.scroll && _controller.isReady) _zoomBeforeFullscreen = _controller.currentZoom;
     setState(() => _fullscreen = on);
     if (Platform.isLinux) {
       await _windowChannel.invokeMethod('setFullscreen', on);
     } else {
       _setChrome(!on);
+    }
+    // Wait for the window to settle at its new size, then reframe. (Single /
+    // Two pages also reframe on resize; Scroll only does here.)
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    if (!mounted || !_controller.isReady) return;
+    final page = _page ?? 1;
+    if (_layout != ReaderLayout.scroll) {
+      await _frame(page);
+    } else if (on) {
+      await _frame(page, keepY: true);
+    } else {
+      final zoom = _zoomBeforeFullscreen;
+      _zoomBeforeFullscreen = null;
+      if (zoom != null) await _controller.setZoom(_controller.centerPosition, zoom);
     }
   }
 
@@ -1142,7 +1208,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 Expanded(
                   child: Stack(
                     children: [
-                      Positioned.fill(child: _viewer()),
+                      Positioned.fill(
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            _onViewSize(constraints.biggest);
+                            return _viewer();
+                          },
+                        ),
+                      ),
                       if (offer != null)
                         Positioned(
                           right: 24,
