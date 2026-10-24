@@ -18,6 +18,8 @@ class Book {
     this.sizeBytes,
     this.isLocal = true,
     this.progressUpdatedAt,
+    this.progressDevice,
+    this.chapter,
   });
 
   final String id;
@@ -47,9 +49,33 @@ class Book {
   /// device). Compared across devices: the latest position wins.
   DateTime? progressUpdatedAt;
 
+  /// Name of the device the current position came from, or null when it was
+  /// read on this device.
+  String? progressDevice;
+
+  /// Top-level outline entry (e.g. "9 Functions") at [lastPage], as last seen
+  /// by this device's reader. Cleared when a position from elsewhere arrives.
+  String? chapter;
+
   /// Whether the PDF is downloaded on this device. Not persisted: derived from
   /// the file's presence when the library loads.
   bool isLocal;
+
+  bool get isFinished {
+    final count = pageCount;
+    return count != null && lastPage >= count;
+  }
+
+  /// Opened or read somewhere (possibly another device) and not finished.
+  bool get isStarted => (lastOpenedAt != null || progressUpdatedAt != null) && !isFinished;
+
+  /// When this book was last read on any device.
+  DateTime? get lastReadAt {
+    final a = lastOpenedAt, b = progressUpdatedAt;
+    if (a == null) return b;
+    if (b == null) return a;
+    return a.isAfter(b) ? a : b;
+  }
 
   double get progress {
     final count = pageCount;
@@ -72,6 +98,8 @@ class Book {
         progressUpdatedAt: json['progressUpdatedAt'] == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch(json['progressUpdatedAt'] as int),
+        progressDevice: json['progressDevice'] as String?,
+        chapter: json['chapter'] as String?,
         lastOpenedAt: json['lastOpenedAt'] == null
             ? null
             : DateTime.fromMillisecondsSinceEpoch(json['lastOpenedAt'] as int),
@@ -90,6 +118,8 @@ class Book {
         'driveFileId': driveFileId,
         'sizeBytes': sizeBytes,
         'progressUpdatedAt': progressUpdatedAt?.millisecondsSinceEpoch,
+        'progressDevice': progressDevice,
+        'chapter': chapter,
         'lastOpenedAt': lastOpenedAt?.millisecondsSinceEpoch,
       };
 }

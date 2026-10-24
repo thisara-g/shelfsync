@@ -349,6 +349,38 @@ void main() {
       expect(tablet.store.byId(id)!.lastPage, 1);
     });
 
+    test('remembers which device the position came from', () async {
+      await read(pc, 50);
+      await tablet.library.syncNow();
+      expect(tablet.store.byId(id)!.progressDevice, pc.store.deviceName);
+
+      await read(tablet, 60);
+      expect(tablet.store.byId(id)!.progressDevice, isNull, reason: 'read here now');
+    });
+
+    test('with auto-jump on, closed books move without asking', () async {
+      await read(pc, 50);
+      await tablet.library.syncNow();
+      await read(tablet, 120);
+      await pc.store.setAutoJump(true);
+
+      await pc.library.syncNow();
+      expect(pc.library.pendingJumpFor(id), isNull);
+      expect(pc.store.byId(id)!.lastPage, 120);
+    });
+
+    test('with auto-jump on, the open book still goes through the reader', () async {
+      await read(pc, 50);
+      await tablet.library.syncNow();
+      await read(tablet, 120);
+      await pc.store.setAutoJump(true);
+      pc.library.openBookId = id;
+
+      await pc.library.syncNow();
+      expect(pc.library.pendingJumpFor(id)?.page, 120);
+      expect(pc.store.byId(id)!.lastPage, 50);
+    });
+
     test('re-deriving the same spot on open does not count as reading', () async {
       await read(pc, 50, offset: const Offset(0, 0.42));
       final before = pc.store.byId(id)!.progressUpdatedAt;

@@ -13,6 +13,9 @@ import '../models/book.dart';
 /// Result of importing a file into the library.
 enum ImportResult { added, duplicate }
 
+/// How the reader colours pages.
+enum ReaderTheme { light, sepia, dark }
+
 /// Persists the library as `library.json` plus one `books/<id>.pdf` per book
 /// under [rootDir].
 class LibraryStore extends ChangeNotifier {
@@ -20,7 +23,10 @@ class LibraryStore extends ChangeNotifier {
 
   final Directory rootDir;
   final Map<String, Book> _books = {};
-  bool _darkReader = false;
+  ReaderTheme _readerTheme = ReaderTheme.light;
+  bool _autoJump = false;
+  bool _welcomeDone = false;
+  bool _twoPageSpread = false;
   String? _syncAccount;
   String _deviceId = '';
   String _deviceName = '';
@@ -31,8 +37,17 @@ class LibraryStore extends ChangeNotifier {
   /// Human-readable name shown on other devices ("from ubuntu-pc").
   String get deviceName => _deviceName;
 
-  /// Whether the reader shows pages in dark mode (applies to all books).
-  bool get darkReader => _darkReader;
+  /// Page colours in the reader (applies to all books).
+  ReaderTheme get readerTheme => _readerTheme;
+
+  /// Move to a newer position from another device without asking.
+  bool get autoJump => _autoJump;
+
+  /// Whether the first-run welcome screen has been dismissed.
+  bool get welcomeDone => _welcomeDone;
+
+  /// Desktop reader shows facing pages side by side.
+  bool get twoPageSpread => _twoPageSpread;
 
   File get _indexFile => File(p.join(rootDir.path, 'library.json'));
   Directory get _booksDir => Directory(p.join(rootDir.path, 'books'));
@@ -61,7 +76,12 @@ class LibraryStore extends ChangeNotifier {
     if (await _indexFile.exists()) {
       final json = jsonDecode(await _indexFile.readAsString()) as Map<String, dynamic>;
       final settings = json['settings'] as Map<String, dynamic>? ?? const {};
-      _darkReader = settings['darkReader'] as bool? ?? false;
+      _readerTheme = ReaderTheme.values.asNameMap()[settings['readerTheme']] ??
+          (settings['darkReader'] == true ? ReaderTheme.dark : ReaderTheme.light);
+      _autoJump = settings['autoJump'] as bool? ?? false;
+      _twoPageSpread = settings['twoPageSpread'] as bool? ?? false;
+      // Existing users (from 0.1) already know the app: skip the welcome.
+      _welcomeDone = settings['welcomeDone'] as bool? ?? true;
       _syncAccount = settings['syncAccount'] as String?;
       _deviceId = settings['deviceId'] as String? ?? '';
       _deviceName = settings['deviceName'] as String? ?? '';
@@ -73,6 +93,10 @@ class LibraryStore extends ChangeNotifier {
       }
     }
     var changed = false;
+    if (!await _indexFile.exists()) {
+      _welcomeDone = false;
+      changed = true;
+    }
     if (_deviceId.isEmpty) {
       final random = Random.secure();
       _deviceId = List.generate(16, (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
@@ -97,7 +121,10 @@ class LibraryStore extends ChangeNotifier {
     final json = {
       'version': 1,
       'settings': {
-        'darkReader': _darkReader,
+        'readerTheme': _readerTheme.name,
+        'autoJump': _autoJump,
+        'welcomeDone': _welcomeDone,
+        'twoPageSpread': _twoPageSpread,
         'syncAccount': _syncAccount,
         'deviceId': _deviceId,
         'deviceName': _deviceName,
@@ -214,9 +241,30 @@ class LibraryStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> setDarkReader(bool value) async {
-    if (_darkReader == value) return;
-    _darkReader = value;
+  Future<void> setReaderTheme(ReaderTheme value) async {
+    if (_readerTheme == value) return;
+    _readerTheme = value;
+    await _save();
+    notifyListeners();
+  }
+
+  Future<void> setAutoJump(bool value) async {
+    if (_autoJump == value) return;
+    _autoJump = value;
+    await _save();
+    notifyListeners();
+  }
+
+  Future<void> setWelcomeDone() async {
+    if (_welcomeDone) return;
+    _welcomeDone = true;
+    await _save();
+    notifyListeners();
+  }
+
+  Future<void> setTwoPageSpread(bool value) async {
+    if (_twoPageSpread == value) return;
+    _twoPageSpread = value;
     await _save();
     notifyListeners();
   }
@@ -235,16 +283,23 @@ class LibraryStore extends ChangeNotifier {
     int? pageCount,
     Offset? pageOffset,
     double? zoom,
+    String? chapter,
   }) async {
     final book = _books[id];
     if (book == null) return;
     final unchanged = book.lastPage == page &&
+        (chapter == null || book.chapter == chapter) &&
         (pageCount == null || book.pageCount == pageCount) &&
         (pageOffset == null || (book.pageOffsetX == pageOffset.dx && book.pageOffsetY == pageOffset.dy)) &&
         (zoom == null || book.zoom == zoom);
     if (unchanged) return;
-    if (_movedFrom(book, page, pageOffset)) book.progressUpdatedAt = DateTime.now();
+    if (_movedFrom(book, page, pageOffset)) {
+      book
+        ..progressUpdatedAt = DateTime.now()
+        ..progressDevice = null;
+    }
     book.lastPage = page;
+    if (chapter != null) book.chapter = chapter;
     if (pageCount != null) book.pageCount = pageCount;
     if (pageOffset != null) {
       book.pageOffsetX = pageOffset.dx;
@@ -273,10 +328,13 @@ class LibraryStore extends ChangeNotifier {
     required int page,
     required Offset? pageOffset,
     required DateTime updatedAt,
+    String? device,
   }) async {
     final book = _books[id];
     if (book == null) return;
+    if (book.lastPage != page) book.chapter = null;
     book
+      ..progressDevice = device
       ..lastPage = page
       ..pageOffsetX = pageOffset?.dx
       ..pageOffsetY = pageOffset?.dy
@@ -290,7 +348,9 @@ class LibraryStore extends ChangeNotifier {
   Future<void> touchProgress(String id) async {
     final book = _books[id];
     if (book == null) return;
-    book.progressUpdatedAt = DateTime.now();
+    book
+      ..progressUpdatedAt = DateTime.now()
+      ..progressDevice = null;
     await _save();
     notifyListeners();
   }

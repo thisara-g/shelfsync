@@ -78,12 +78,15 @@ that app when Android asks.
 
 | | |
 |---|---|
-| **Add books** | **Add PDF** in the library. They upload to Drive in the background. |
+| **Add books** | **Add PDF**, or on Linux drag PDF files onto the window (Ctrl+O also works). They upload to Drive in the background. |
+| **Continue reading** | The top of the library shows what you're reading on any device, where you were and when. One tap or click to continue. |
+| **Find books** | Search, filter (Reading, Finished, In Drive, On this device) and sort. On Linux the sidebar holds the filters and Ctrl+K jumps to search. |
 | **Books from your other device** | Shown with a cloud badge. Tap one to download and open it. |
-| **Sync** | Automatic on start, when you return to the app, after adding books and every 5 minutes. Pull down (tablet) or use the cloud button → *Sync now*. |
-| **Reading position** | Saved continuously. If the other device read further, the reader asks *"Jump to page X (from …)?"*. **Stay here** keeps your position and makes it the newest instead. |
-| **Dark pages** | The moon button in the reader. |
-| **Navigate** | Scroll or swipe; click the page number to jump to a page. On desktop, PgUp/PgDn and the arrow keys work too. |
+| **Reader (tablet)** | Tap the page to show or hide the controls. Drag the slider to move through the book (ticks mark chapters). Contents and page thumbnails are behind the list button. |
+| **Reader (Linux)** | Contents and page thumbnails in the side panel (Ctrl+B). Type a page number (Ctrl+G), zoom, **Fit width** (Ctrl+0), and **Two pages** for a book-like spread. ←/→ and PgUp/PgDn turn pages. |
+| **Page colour** | Light, Sepia or Dark. Dark inverts text but keeps images in their real colours. |
+| **Resume from another device** | If another device has a newer position, the tablet shows a sheet and Linux shows a corner notification (press J to jump). Tick *Always jump* to move there automatically from then on. |
+| **Sync** | Automatic on start, when you return to the app, after adding books and every 5 minutes. The status pill (tablet) or account box (Linux) shows the state and opens the account menu. |
 | **Remove** | Right-click (desktop) or long-press (tablet) a book:<br>• **Remove download** frees space but keeps the book in the cloud.<br>• **Delete everywhere** moves it to the Drive trash and removes it from all devices. |
 
 ## Good to know
@@ -130,7 +133,7 @@ lib/
   services/library_store.dart  library.json + books/<hash>.pdf in the app data dir
   services/cover_renderer.dart first-page thumbnails
   services/page_image_regions.dart  finds images on a page (PDFium) for dark mode
-  screens/                     library grid, reader, sync button
+  screens/                     welcome, library, reader (+ reader_parts), sync status
   sync/google_auth.dart        sign-in: loopback OAuth (Linux), Play services (Android)
   sync/drive_service.dart      Drive v3 calls: folder, books, progress records
   sync/library_sync.dart       the sync engine: books + reading positions

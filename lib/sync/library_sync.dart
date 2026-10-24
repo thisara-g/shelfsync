@@ -41,6 +41,7 @@ class LibrarySync extends ChangeNotifier {
   bool _running = false;
   bool _again = false;
   String? _lastError;
+  DateTime? _lastSyncedAt;
 
   static const _interval = Duration(minutes: 5);
   static const _pushDelay = Duration(seconds: 5);
@@ -64,6 +65,9 @@ class LibrarySync extends ChangeNotifier {
 
   /// Message from the last failed sync, cleared by the next good one.
   String? get lastError => _lastError;
+
+  /// When the last full sync finished without errors.
+  DateTime? get lastSyncedAt => _lastSyncedAt;
 
   void start() {
     sync.addListener(_onConnectionChanged);
@@ -103,6 +107,7 @@ class LibrarySync extends ChangeNotifier {
         await _syncOnce();
       } while (_again);
       _lastError = null;
+      _lastSyncedAt = DateTime.now();
     } catch (e) {
       _lastError = '$e';
     } finally {
@@ -181,7 +186,9 @@ class LibrarySync extends ChangeNotifier {
       _dirtyProgress.remove(book.id);
       final samePlace = remote.page == book.lastPage;
       // Nothing read here yet (or not even downloaded): just take it.
-      final silent = samePlace || (book.id != openBookId && (local == null || !book.isLocal));
+      // With auto-jump on, closed books just move; the open one still goes
+      // through the reader so it can scroll there.
+      final silent = samePlace || (book.id != openBookId && (local == null || !book.isLocal || store.autoJump));
       if (silent) {
         _pendingJumps.remove(book.id);
         await store.applyRemoteProgress(
@@ -189,6 +196,7 @@ class LibrarySync extends ChangeNotifier {
           page: remote.page,
           pageOffset: remote.pageOffset,
           updatedAt: remote.updated,
+          device: remote.device,
         );
       } else {
         _pendingJumps[book.id] = remote;
@@ -221,6 +229,7 @@ class LibrarySync extends ChangeNotifier {
       page: remote.page,
       pageOffset: remote.pageOffset,
       updatedAt: remote.updated,
+      device: remote.device,
     );
     notifyListeners();
     return remote;

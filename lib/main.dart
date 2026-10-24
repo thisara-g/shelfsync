@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'screens/library_screen.dart';
+import 'screens/welcome_screen.dart';
 import 'services/library_store.dart';
 import 'sync/google_auth.dart';
 import 'sync/library_sync.dart';
@@ -33,7 +34,7 @@ class ShelfSyncApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const seed = Colors.teal;
+    const seed = Color(0xFF00897B);
     return MaterialApp(
       title: 'ShelfSync',
       debugShowCheckedModeBanner: false,
@@ -41,7 +42,12 @@ class ShelfSyncApp extends StatelessWidget {
       darkTheme: ThemeData(colorSchemeSeed: seed, brightness: Brightness.dark),
       home: _SyncOnResume(
         librarySync: librarySync,
-        child: LibraryScreen(store: store, sync: sync, librarySync: librarySync),
+        child: ListenableBuilder(
+          listenable: store,
+          builder: (context, _) => store.welcomeDone
+              ? LibraryScreen(store: store, sync: sync, librarySync: librarySync)
+              : WelcomeScreen(store: store, sync: sync),
+        ),
       ),
     );
   }

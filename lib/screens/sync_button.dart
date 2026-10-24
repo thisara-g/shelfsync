@@ -4,8 +4,32 @@ import 'package:url_launcher/url_launcher.dart';
 import '../sync/drive_service.dart';
 import '../sync/library_sync.dart';
 import '../sync/sync_controller.dart';
+import 'common.dart';
 
-/// App-bar button showing the Google Drive connection state.
+void showAccountSheet(BuildContext context, SyncController sync, LibrarySync librarySync) {
+  showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    constraints: const BoxConstraints(maxWidth: 560),
+    builder: (_) => _AccountSheet(sync: sync, librarySync: librarySync),
+  );
+}
+
+/// Short sync state for the chip and the sidebar: (icon, label, isProblem).
+(IconData, String, bool) _syncState(SyncController sync, LibrarySync librarySync) {
+  final failed = sync.status == SyncStatus.connected && librarySync.lastError != null;
+  return switch (sync.status) {
+    SyncStatus.notConfigured => (Icons.cloud_off_outlined, 'Sync not set up', false),
+    SyncStatus.signedOut => (Icons.cloud_outlined, 'Not signed in', false),
+    SyncStatus.connecting => (Icons.cloud_sync_outlined, 'Connecting…', false),
+    SyncStatus.connected when librarySync.isSyncing => (Icons.cloud_sync_outlined, 'Syncing…', false),
+    SyncStatus.connected when failed => (Icons.sync_problem_outlined, 'Sync failed', true),
+    SyncStatus.connected => (Icons.check, 'Synced', false),
+    SyncStatus.error => (Icons.cloud_off_outlined, 'Sync problem', true),
+  };
+}
+
+/// Pill in the library header: "Synced", "Syncing…", or a Sign in button.
 class SyncButton extends StatelessWidget {
   const SyncButton({super.key, required this.sync, required this.librarySync});
 
@@ -17,38 +41,108 @@ class SyncButton extends StatelessWidget {
     return ListenableBuilder(
       listenable: Listenable.merge([sync, librarySync]),
       builder: (context, _) {
-        final syncProblem = sync.status == SyncStatus.connected && librarySync.lastError != null;
-        final (icon, tooltip) = switch (sync.status) {
-          SyncStatus.notConfigured => (Icons.cloud_off_outlined, 'Sync not set up'),
-          SyncStatus.signedOut => (Icons.cloud_outlined, 'Sign in to sync'),
-          SyncStatus.connecting => (Icons.cloud_sync_outlined, 'Connecting…'),
-          SyncStatus.connected when librarySync.isSyncing => (Icons.cloud_sync_outlined, 'Syncing…'),
-          SyncStatus.connected when syncProblem => (Icons.sync_problem_outlined, 'Last sync failed'),
-          SyncStatus.connected => (Icons.cloud_done_outlined, 'Synced with Google Drive'),
-          SyncStatus.error => (Icons.cloud_off_outlined, 'Sync problem'),
-        };
         if (sync.status == SyncStatus.signedOut) {
-          return Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: FilledButton.tonalIcon(
-              onPressed: sync.signIn,
-              icon: Icon(icon),
-              label: const Text('Sign in'),
-            ),
+          return FilledButton.tonalIcon(
+            onPressed: sync.signIn,
+            icon: const Icon(Icons.login),
+            label: const Text('Sign in'),
           );
         }
-        return IconButton(
-          tooltip: tooltip,
-          icon: sync.status == SyncStatus.connecting
-              ? const SizedBox.square(dimension: 20, child: CircularProgressIndicator(strokeWidth: 2))
-              : Icon(
-                  icon,
-                  color: sync.status == SyncStatus.error || syncProblem ? Theme.of(context).colorScheme.error : null,
-                ),
-          onPressed: () => showModalBottomSheet<void>(
-            context: context,
-            showDragHandle: true,
-            builder: (_) => _AccountSheet(sync: sync, librarySync: librarySync),
+        final scheme = Theme.of(context).colorScheme;
+        final (icon, label, problem) = _syncState(sync, librarySync);
+        final busy = sync.status == SyncStatus.connecting || librarySync.isSyncing;
+        final background = problem ? scheme.errorContainer : scheme.primaryContainer;
+        final foreground = problem ? scheme.onErrorContainer : scheme.onPrimaryContainer;
+        return Material(
+          color: background,
+          shape: const StadiumBorder(),
+          child: InkWell(
+            customBorder: const StadiumBorder(),
+            onTap: () => showAccountSheet(context, sync, librarySync),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  busy
+                      ? SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: foreground),
+                        )
+                      : Icon(icon, size: 18, color: foreground),
+                  const SizedBox(width: 8),
+                  Text(label, style: TextStyle(color: foreground, fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// Account row at the bottom of the desktop sidebar.
+class SidebarAccount extends StatelessWidget {
+  const SidebarAccount({super.key, required this.sync, required this.librarySync});
+
+  final SyncController sync;
+  final LibrarySync librarySync;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: Listenable.merge([sync, librarySync]),
+      builder: (context, _) {
+        final theme = Theme.of(context);
+        if (sync.status == SyncStatus.signedOut) {
+          return FilledButton.icon(
+            onPressed: sync.signIn,
+            icon: const Icon(Icons.login),
+            label: const Text('Sign in to sync'),
+          );
+        }
+        final (icon, label, problem) = _syncState(sync, librarySync);
+        final account = sync.account;
+        final name = account == null
+            ? 'ShelfSync'
+            : (account.displayName.isNotEmpty ? account.displayName : account.email);
+        final syncedAt = librarySync.lastSyncedAt;
+        final status = label == 'Synced' && syncedAt != null ? 'Synced · ${timeAgo(syncedAt)}' : label;
+        return Material(
+          color: theme.colorScheme.surfaceContainerHigh,
+          borderRadius: BorderRadius.circular(12),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => showAccountSheet(context, sync, librarySync),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    radius: 18,
+                    child: account == null ? Icon(icon, size: 18) : Text(name.characters.first.toUpperCase()),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(name, maxLines: 1, overflow: TextOverflow.ellipsis, style: theme.textTheme.titleSmall),
+                        Text(
+                          status,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: problem ? theme.colorScheme.error : theme.colorScheme.primary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         );
       },

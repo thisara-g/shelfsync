@@ -65,4 +65,53 @@ void main() {
     expect(store.books, isEmpty);
     expect(await store.fileFor(book).exists(), isFalse);
   });
+
+  test('reader settings persist; a fresh install shows the welcome', () async {
+    final dir = Directory(p.join(tmp.path, 'lib'));
+    final store = LibraryStore(dir);
+    await store.load();
+    expect(store.welcomeDone, isFalse);
+    expect(store.readerTheme, ReaderTheme.light);
+
+    await store.setWelcomeDone();
+    await store.setReaderTheme(ReaderTheme.sepia);
+    await store.setAutoJump(true);
+    await store.setTwoPageSpread(true);
+
+    final reloaded = LibraryStore(dir);
+    await reloaded.load();
+    expect(reloaded.welcomeDone, isTrue);
+    expect(reloaded.readerTheme, ReaderTheme.sepia);
+    expect(reloaded.autoJump, isTrue);
+    expect(reloaded.twoPageSpread, isTrue);
+  });
+
+  test('a 0.1 library keeps dark pages and skips the welcome', () async {
+    final dir = Directory(p.join(tmp.path, 'lib'));
+    await dir.create(recursive: true);
+    await File(p.join(dir.path, 'library.json')).writeAsString(
+      '{"version":1,"settings":{"darkReader":true,"deviceId":"ab","deviceName":"pc"},"books":[]}',
+    );
+    final store = LibraryStore(dir);
+    await store.load();
+    expect(store.readerTheme, ReaderTheme.dark);
+    expect(store.welcomeDone, isTrue);
+  });
+
+  test('finished and started books', () async {
+    final store = LibraryStore(Directory(p.join(tmp.path, 'lib')));
+    await store.load();
+    await store.importFile(source.path);
+    final book = store.books.single;
+    expect(book.isStarted, isFalse);
+
+    await store.markOpened(book.id);
+    await store.updateProgress(book.id, page: 10, pageCount: 20, chapter: '2 Basics');
+    expect(book.isStarted, isTrue);
+    expect(book.chapter, '2 Basics');
+
+    await store.updateProgress(book.id, page: 20, pageCount: 20);
+    expect(book.isFinished, isTrue);
+    expect(book.isStarted, isFalse);
+  });
 }
