@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -171,7 +172,24 @@ class LibraryStore extends ChangeNotifier {
     return host.isEmpty || host == 'localhost' ? Platform.operatingSystem : host;
   }
 
+  /// The last queued write; saves run one at a time so that two of them
+  /// never share the temp file.
+  Future<void>? _saving;
+
   Future<void> _save() async {
+    final previous = _saving;
+    final done = Completer<void>();
+    _saving = done.future;
+    try {
+      if (previous != null) await previous;
+      await _write();
+    } finally {
+      done.complete();
+      if (identical(_saving, done.future)) _saving = null;
+    }
+  }
+
+  Future<void> _write() async {
     final tmp = File('${_indexFile.path}.tmp');
     final json = {
       'version': 1,
@@ -277,6 +295,58 @@ class LibraryStore extends ChangeNotifier {
     return title[0].toUpperCase() + title.substring(1);
   }
 
+  static const _smallWords = {'a', 'an', 'and', 'as', 'at', 'by', 'for', 'in', 'of', 'on', 'or', 'the', 'to', 'with'};
+  static const _ordinals = {
+    'first': '1st', 'second': '2nd', 'third': '3rd', 'fourth': '4th', 'fifth': '5th',
+    'sixth': '6th', 'seventh': '7th', 'eighth': '8th', 'ninth': '9th', 'tenth': '10th',
+  };
+
+  /// Download-site tags found in book file names.
+  static const _noiseWords = {
+    'compress', 'compressed', 'ebook', 'libgen', 'retail', 'scan', 'scanned', 'ocr', 'pdf', 'epub', 'dl', 'www',
+  };
+
+  /// Junk in file names: ISBNs and other long numbers, and site tags such
+  /// as "compress" or "2nbsped" (Library Genesis).
+  static bool _isNoise(String word) {
+    final w = word.toLowerCase();
+    return _noiseWords.contains(w) ||
+        RegExp(r'^\d{5,}$').hasMatch(w) ||
+        RegExp(r'^\d{9}[\dx]$').hasMatch(w) ||
+        RegExp(r'^\d*[a-z]*sped$').hasMatch(w);
+  }
+
+  /// Titles to offer when renaming: the file name, minus junk like ISBNs, in
+  /// title case with any edition in brackets ("C Programming a Modern
+  /// Approach (2nd edition)"), then with every word capitalised. Leaves out
+  /// [currentTitle].
+  static List<String> renameSuggestions(String fileName, String currentTitle) {
+    final words = titleFromFileName(fileName).split(RegExp(r'\s+')).where((w) => !_isNoise(w)).toList();
+    if (words.isEmpty) return const [];
+    // Keeps words that already have their own capitals, like "NR" or "iOS".
+    String cap(String w) => w.isEmpty || w.substring(1) != w.substring(1).toLowerCase()
+        ? w
+        : w[0].toUpperCase() + w.substring(1).toLowerCase();
+
+    var base = words;
+    String? edition;
+    if (words.length > 2 && {'edition', 'ed', 'edn'}.contains(words.last.toLowerCase())) {
+      final n = words[words.length - 2].toLowerCase();
+      final ordinal = _ordinals[n] ?? (RegExp(r'^\d+(st|nd|rd|th)$').hasMatch(n) ? n : null);
+      if (ordinal != null) {
+        edition = '($ordinal edition)';
+        base = words.sublist(0, words.length - 2);
+      }
+    }
+    final titleCase = [
+      for (var i = 0; i < base.length; i++)
+        i > 0 && _smallWords.contains(base[i].toLowerCase()) ? base[i].toLowerCase() : cap(base[i]),
+      ?edition,
+    ].join(' ');
+    final everyWord = words.map(cap).join(' ');
+    return {titleCase, everyWord}.where((t) => t != currentTitle && t.isNotEmpty).toList();
+  }
+
   Future<void> setDriveFileId(String id, String? driveFileId) async {
     final book = _books[id];
     if (book == null || book.driveFileId == driveFileId) return;
@@ -341,23 +411,38 @@ class LibraryStore extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<Shelf> createShelf(String name) async {
+  /// The colour [createShelf] picks when none is given.
+  int get nextShelfColor => _shelves.length % shelfColors.length;
+
+  Future<Shelf> createShelf(String name, {int? color}) async {
     final random = Random.secure();
     final shelf = Shelf(
       id: List.generate(8, (_) => random.nextInt(256).toRadixString(16).padLeft(2, '0')).join(),
       name: name.trim(),
-      color: _shelves.length % shelfColors.length,
+      color: color ?? nextShelfColor,
     );
     _shelves.add(shelf);
     await _shelvesChanged();
     return shelf;
   }
 
-  Future<void> renameShelf(String id, String name) async {
+  Future<void> renameShelf(String id, String name) => editShelf(id, name: name);
+
+  /// Changes a shelf's name and/or colour; a blank name is ignored.
+  Future<void> editShelf(String id, {String? name, int? color}) async {
     final shelf = shelfById(id);
-    if (shelf == null || name.trim().isEmpty || shelf.name == name.trim()) return;
-    shelf.name = name.trim();
-    await _shelvesChanged();
+    if (shelf == null) return;
+    var changed = false;
+    final trimmed = name?.trim() ?? '';
+    if (trimmed.isNotEmpty && trimmed != shelf.name) {
+      shelf.name = trimmed;
+      changed = true;
+    }
+    if (color != null && color != shelf.color) {
+      shelf.color = color;
+      changed = true;
+    }
+    if (changed) await _shelvesChanged();
   }
 
   /// Deletes the shelf; its books stay in the library.
@@ -371,6 +456,18 @@ class LibraryStore extends ChangeNotifier {
     if (shelf == null) return;
     final changed = on ? shelf.bookIds.add(bookId) : shelf.bookIds.remove(bookId);
     if (changed) await _shelvesChanged();
+  }
+
+  /// Puts several books on a shelf with one save; returns how many were new.
+  Future<int> addToShelf(String shelfId, Iterable<String> bookIds) async {
+    final shelf = shelfById(shelfId);
+    if (shelf == null) return 0;
+    var added = 0;
+    for (final id in bookIds) {
+      if (shelf.bookIds.add(id)) added++;
+    }
+    if (added > 0) await _shelvesChanged();
+    return added;
   }
 
   /// Adopts shelves synced from another device.

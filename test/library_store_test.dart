@@ -72,6 +72,40 @@ void main() {
     expect(LibraryStore.titleFromFileName('notes.pdf'), 'Notes');
   });
 
+  test('suggests proper titles for a rename', () {
+    expect(
+      LibraryStore.renameSuggestions(
+        'c-programming-a-modern-approach-second-edition.pdf',
+        'c-programming-a-modern-approach-second-edition',
+      ),
+      ['C Programming a Modern Approach (2nd edition)', 'C Programming A Modern Approach Second Edition'],
+    );
+    expect(LibraryStore.renameSuggestions('communication_systems_4th_ed.pdf', 'x'), [
+      'Communication Systems (4th edition)',
+      'Communication Systems 4th Ed',
+    ]);
+    // ISBNs, ids and site tags are dropped.
+    expect(
+      LibraryStore.renameSuggestions(
+        'c-programming-a-modern-approach-second-edition-2nbsped-9780393979503-2007049425_compress.pdf',
+        'x',
+      ),
+      ['C Programming a Modern Approach (2nd edition)', 'C Programming A Modern Approach Second Edition'],
+    );
+    // Own capitals survive; the current title is not offered again.
+    expect(LibraryStore.renameSuggestions('5G NR in Bullets.pdf', '5G NR in Bullets'), ['5G NR In Bullets']);
+  });
+
+  test('a shelf can change name and colour', () async {
+    final store = LibraryStore(Directory(p.join(tmp.path, 'lib')));
+    await store.load();
+    final shelf = await store.createShelf('Novels');
+    await store.editShelf(shelf.id, name: ' Fiction ', color: 7);
+    expect((shelf.name, shelf.color), ('Fiction', 7));
+    await store.editShelf(shelf.id, name: '  ');
+    expect(shelf.name, 'Fiction');
+  });
+
   test('reader settings persist; a fresh install shows the welcome', () async {
     final dir = Directory(p.join(tmp.path, 'lib'));
     final store = LibraryStore(dir);
@@ -119,5 +153,34 @@ void main() {
     await store.updateProgress(book.id, page: 20, pageCount: 20);
     expect(book.isFinished, isTrue);
     expect(book.isStarted, isFalse);
+  });
+
+  test('shelves keep their colour and take several books at once', () async {
+    final root = Directory(p.join(tmp.path, 'lib'));
+    final store = LibraryStore(root);
+    await store.load();
+    final shelf = await store.createShelf('Research papers', color: 4);
+    expect(await store.addToShelf(shelf.id, ['a', 'b']), 2);
+    expect(await store.addToShelf(shelf.id, ['b', 'c']), 1);
+
+    final reloaded = LibraryStore(root);
+    await reloaded.load();
+    final again = reloaded.shelfById(shelf.id)!;
+    expect(again.color, 4);
+    expect(again.bookIds, {'a', 'b', 'c'});
+  });
+
+  test('saves started together all land, the last one winning', () async {
+    final root = Directory(p.join(tmp.path, 'lib'));
+    final store = LibraryStore(root);
+    await store.load();
+    final shelf = await store.createShelf('Novels');
+    await Future.wait([
+      for (var i = 0; i < 10; i++) store.setOnShelf(shelf.id, 'book$i', true),
+    ]);
+
+    final reloaded = LibraryStore(root);
+    await reloaded.load();
+    expect(reloaded.shelfById(shelf.id)!.bookIds, hasLength(10));
   });
 }
