@@ -7,6 +7,8 @@ import 'package:path_provider/path_provider.dart';
 
 import 'screens/common.dart';
 import 'screens/library_screen.dart';
+import 'screens/splash_screen.dart';
+import 'screens/tablet_ui.dart';
 import 'screens/welcome_screen.dart';
 import 'services/library_store.dart';
 import 'sync/google_auth.dart';
@@ -21,6 +23,12 @@ Future<void> main() async {
       yield LicenseEntryWithLineBreaks([font], await rootBundle.loadString('assets/fonts/$font-OFL.txt'));
     }
   });
+  // The tablet shows its splash while the library loads, for at least a
+  // moment so it doesn't flicker.
+  final splash = Platform.isAndroid ? Future<void>.delayed(const Duration(milliseconds: 900)) : null;
+  if (splash != null) {
+    runApp(MaterialApp(debugShowCheckedModeBanner: false, theme: tabletTheme(), home: const TabletSplash()));
+  }
   final supportDir = Directory((await getApplicationSupportDirectory()).path);
   final store = LibraryStore(supportDir);
   await store.load();
@@ -30,8 +38,12 @@ Future<void> main() async {
   final librarySync = LibrarySync(store: store, sync: sync)..start();
   sync.start();
 
+  await splash;
   runApp(ShelfSyncApp(store: store, sync: sync, librarySync: librarySync));
 }
+
+/// On the tablet the first screen fades in over the splash.
+Widget _fadeIn(Widget child) => Platform.isAndroid ? FadeInOnce(child: child) : child;
 
 class ShelfSyncApp extends StatelessWidget {
   const ShelfSyncApp({super.key, required this.store, required this.sync, required this.librarySync});
@@ -45,14 +57,17 @@ class ShelfSyncApp extends StatelessWidget {
     return MaterialApp(
       title: 'ShelfSync',
       debugShowCheckedModeBanner: false,
-      theme: shelfSyncTheme(),
+      // The tablet is dark throughout, so dialogs and sheets match it.
+      theme: Platform.isAndroid ? tabletTheme() : shelfSyncTheme(),
       home: _SyncOnResume(
         librarySync: librarySync,
-        child: ListenableBuilder(
-          listenable: store,
-          builder: (context, _) => store.welcomeDone
-              ? LibraryScreen(store: store, sync: sync, librarySync: librarySync)
-              : WelcomeScreen(store: store, sync: sync),
+        child: _fadeIn(
+          ListenableBuilder(
+            listenable: store,
+            builder: (context, _) => store.welcomeDone
+                ? LibraryScreen(store: store, sync: sync, librarySync: librarySync)
+                : WelcomeScreen(store: store, sync: sync),
+          ),
         ),
       ),
     );

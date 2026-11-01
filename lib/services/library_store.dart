@@ -451,6 +451,13 @@ class LibraryStore extends ChangeNotifier {
     await _shelvesChanged();
   }
 
+  /// Puts back a shelf deleted moments ago (Undo), at [index] in the list.
+  Future<void> restoreShelf(Shelf shelf, int index) async {
+    if (shelfById(shelf.id) != null) return;
+    _shelves.insert(index.clamp(0, _shelves.length), shelf);
+    await _shelvesChanged();
+  }
+
   Future<void> setOnShelf(String shelfId, String bookId, bool on) async {
     final shelf = shelfById(shelfId);
     if (shelf == null) return;

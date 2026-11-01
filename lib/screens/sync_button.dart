@@ -9,13 +9,20 @@ import '../sync/drive_service.dart';
 import '../sync/library_sync.dart';
 import '../sync/sync_controller.dart';
 import 'common.dart';
+import 'tablet_ui.dart';
 
+/// Tablet: the account and sync sheet.
 void showAccountSheet(BuildContext context, SyncController sync, LibrarySync librarySync) {
   showModalBottomSheet<void>(
     context: context,
-    showDragHandle: true,
-    constraints: const BoxConstraints(maxWidth: 560),
-    builder: (_) => _AccountSheet(sync: sync, librarySync: librarySync),
+    isScrollControlled: true,
+    constraints: const BoxConstraints(maxWidth: 840),
+    backgroundColor: TabletColors.sheet,
+    shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(34))),
+    builder: (_) => Theme(
+      data: tabletTheme(),
+      child: _TabletAccountSheet(sync: sync, librarySync: librarySync),
+    ),
   );
 }
 
@@ -647,94 +654,398 @@ class _DeviceRow extends StatelessWidget {
   }
 }
 
-class _AccountSheet extends StatelessWidget {
-  const _AccountSheet({required this.sync, required this.librarySync});
+
+/// Tablet library header: "Synced · just now" with a status dot, or Sign in.
+class TabletSyncPill extends StatelessWidget {
+  const TabletSyncPill({super.key, required this.sync, required this.librarySync});
 
   final SyncController sync;
   final LibrarySync librarySync;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return ListenableBuilder(
       listenable: Listenable.merge([sync, librarySync]),
       builder: (context, _) {
-        final children = switch (sync.status) {
-          SyncStatus.notConfigured => [
-              const ListTile(
-                leading: Icon(Icons.cloud_off_outlined),
-                title: Text('Google Drive sync is not set up'),
-                subtitle: Text('This build has no Google OAuth client. Run ./setup in the project folder, '
-                    'then rebuild the app.'),
+        if (sync.status == SyncStatus.signedOut) {
+          return GlassPillButton(label: 'Sign in', icon: Icons.login_rounded, height: 40, fontSize: 14, onPressed: sync.signIn);
+        }
+        final (_, label, problem) = _syncState(sync, librarySync);
+        final busy = sync.status == SyncStatus.connecting || librarySync.isSyncing;
+        final syncedAt = librarySync.lastSyncedAt;
+        final arriving = librarySync.isSyncing ? librarySync.incoming + librarySync.arrivedThisSync : 0;
+        final text = arriving > 0
+            ? 'Syncing · $arriving new book${arriving == 1 ? '' : 's'}'
+            : (label == 'Synced' && syncedAt != null ? 'Synced · ${timeAgo(syncedAt)}' : label);
+        final dot = problem ? const Color(0xFFF87171) : (busy ? const Color(0xFFFBBF24) : TabletColors.green);
+        return Material(
+          color: TabletColors.glass,
+          shape: const StadiumBorder(side: BorderSide(color: TabletColors.glassBorder)),
+          child: InkWell(
+            customBorder: const StadiumBorder(),
+            onTap: () => showAccountSheet(context, sync, librarySync),
+            child: Container(
+              height: 40,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  busy
+                      ? SizedBox.square(dimension: 12, child: CircularProgressIndicator(strokeWidth: 2, color: dot))
+                      : Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: dot,
+                            shape: BoxShape.circle,
+                            boxShadow: [BoxShadow(color: dot.withValues(alpha: 0.18), spreadRadius: 4)],
+                          ),
+                        ),
+                  const SizedBox(width: 10),
+                  Text(text, style: const TextStyle(fontSize: 14, color: TabletColors.soft)),
+                ],
               ),
-            ],
-          SyncStatus.connected => [
-              ListTile(
-                leading: const Icon(Icons.account_circle_outlined),
-                title: Text(sync.account?.displayName.isNotEmpty == true ? sync.account!.displayName : 'Signed in'),
-                subtitle: Text(sync.account?.email ?? ''),
-              ),
-              ListTile(
-                leading: const Icon(Icons.folder_outlined),
-                title: const Text('ShelfSync folder'),
-                subtitle: const Text('Books are stored in this folder in your Google Drive'),
-                trailing: const Icon(Icons.open_in_new),
-                onTap: () => launchUrl(DriveService.folderUrl(sync.folderId!), mode: LaunchMode.externalApplication),
-              ),
-              ListTile(
-                leading: librarySync.isSyncing
-                    ? const SizedBox.square(dimension: 24, child: CircularProgressIndicator(strokeWidth: 2))
-                    : Icon(
-                        librarySync.lastError == null ? Icons.sync : Icons.sync_problem_outlined,
-                        color: librarySync.lastError == null ? null : theme.colorScheme.error,
-                      ),
-                title: Text(librarySync.isSyncing ? 'Syncing…' : 'Sync now'),
-                subtitle: librarySync.lastError == null ? null : Text('Last sync failed: ${librarySync.lastError}'),
-                onTap: librarySync.isSyncing ? null : librarySync.syncNow,
-              ),
-              ListTile(
-                leading: const Icon(Icons.logout),
-                title: const Text('Sign out'),
-                onTap: () {
-                  Navigator.pop(context);
-                  sync.signOut();
-                },
-              ),
-            ],
-          SyncStatus.error => [
-              ListTile(
-                leading: Icon(Icons.error_outline, color: theme.colorScheme.error),
-                title: const Text("Couldn't connect to Google Drive"),
-                subtitle: Text(sync.error ?? 'Unknown error'),
-              ),
-              ListTile(leading: const Icon(Icons.refresh), title: const Text('Try again'), onTap: sync.signIn),
-              ListTile(
-                leading: const Icon(Icons.logout),
-                title: const Text('Sign out'),
-                onTap: () {
-                  Navigator.pop(context);
-                  sync.signOut();
-                },
-              ),
-            ],
-          SyncStatus.connecting => [
-              const ListTile(
-                leading: SizedBox.square(dimension: 24, child: CircularProgressIndicator(strokeWidth: 2)),
-                title: Text('Connecting to Google Drive…'),
-                subtitle: Text('Finish signing in in your browser if it opened.'),
-              ),
-            ],
-          SyncStatus.signedOut => [
-              ListTile(leading: const Icon(Icons.login), title: const Text('Sign in with Google'), onTap: sync.signIn),
-            ],
-        };
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: Column(mainAxisSize: MainAxisSize.min, children: children),
+            ),
           ),
         );
       },
+    );
+  }
+}
+
+class _TabletAccountSheet extends StatelessWidget {
+  const _TabletAccountSheet({required this.sync, required this.librarySync});
+
+  final SyncController sync;
+  final LibrarySync librarySync;
+
+  @override
+  Widget build(BuildContext context) {
+    final store = librarySync.store;
+    return ListenableBuilder(
+      listenable: Listenable.merge([sync, librarySync, store]),
+      builder: (context, _) {
+        final account = sync.account;
+        final connected = sync.status == SyncStatus.connected;
+        final signedIn = connected || sync.status == SyncStatus.error || sync.status == SyncStatus.connecting;
+        final name = account == null
+            ? (signedIn ? 'Google account' : 'Not signed in')
+            : (account.displayName.isNotEmpty ? account.displayName : account.email);
+        final inDrive = store.books.where((b) => b.driveFileId != null).toList();
+        final bytes = inDrive.fold<int>(0, (sum, b) => sum + (b.sizeBytes ?? 0));
+        final local = store.books.where((b) => b.isLocal).length;
+
+        // This device: the book last read here. Others: the newest book each
+        // one moved the position of.
+        final readHere = store.books.where((b) => b.progressDevice == null && b.lastOpenedAt != null).toList()
+          ..sort((a, b) => b.lastOpenedAt!.compareTo(a.lastOpenedAt!));
+        final others = <String, Book>{};
+        for (final book in store.books) {
+          final device = book.progressDevice;
+          if (device == null || device == store.deviceName || book.progressUpdatedAt == null) continue;
+          final seen = others[device];
+          if (seen == null || book.progressUpdatedAt!.isAfter(seen.progressUpdatedAt!)) others[device] = book;
+        }
+        final here = readHere.isEmpty ? null : readHere.first;
+
+        return SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(40, 14, 40, 36),
+            child: DefaultTextStyle.merge(
+              style: const TextStyle(color: TabletColors.text, fontFamily: uiFamily),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const SheetHandle(),
+                  const SizedBox(height: 28),
+                  Row(
+                    children: [
+                      AccountRing(
+                        initial: account == null ? null : name.characters.first.toUpperCase(),
+                        size: 72,
+                        border: TabletColors.sheet,
+                      ),
+                      const SizedBox(width: 18),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              signedIn ? 'Signed in with Google' : 'Sign in to sync with your other devices',
+                              style: const TextStyle(fontSize: 15, color: TabletColors.dim),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 22),
+                  _statusCard(),
+                  if (connected) ...[
+                    const SizedBox(height: 22),
+                    Row(
+                      children: [
+                        _Stat(value: '${inDrive.length}', label: inDrive.length == 1 ? 'book in Drive' : 'books in Drive'),
+                        const SizedBox(width: 12),
+                        _Stat(value: bytes == 0 ? '—' : formatSize(bytes), label: 'in your ShelfSync folder'),
+                        const SizedBox(width: 12),
+                        _Stat(value: '$local', label: 'downloaded here'),
+                      ],
+                    ),
+                    const SizedBox(height: 22),
+                    const TabletLabel('Your devices'),
+                    const SizedBox(height: 4),
+                    _TabletDevice(
+                      icon: Platform.isAndroid ? Icons.tablet_android_outlined : Icons.laptop_outlined,
+                      name: Platform.isAndroid ? 'This tablet' : 'This device',
+                      note: here == null
+                          ? store.deviceName
+                          : 'Reading ${here.title} · p. ${here.lastPage} · ${timeAgo(here.lastOpenedAt!)}',
+                      here: true,
+                    ),
+                    for (final MapEntry(key: device, value: book) in others.entries)
+                      _TabletDevice(
+                        icon: Platform.isAndroid ? Icons.laptop_outlined : Icons.tablet_android_outlined,
+                        name: device,
+                        note: 'Read ${book.title} · ${timeAgo(book.progressUpdatedAt!)}',
+                      ),
+                  ],
+                  const SizedBox(height: 28),
+                  if (connected && sync.folderId != null)
+                    Material(
+                      color: const Color(0x0DFFFFFF),
+                      borderRadius: BorderRadius.circular(18),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(18),
+                        onTap: () => launchUrl(DriveService.folderUrl(sync.folderId!), mode: LaunchMode.externalApplication),
+                        child: const SizedBox(
+                          height: 60,
+                          child: Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 20),
+                            child: Row(
+                              children: [
+                                Icon(Icons.folder_outlined, color: TabletColors.accent, size: 22),
+                                SizedBox(width: 14),
+                                Expanded(
+                                  child: Text(
+                                    'Open the ShelfSync folder in Drive',
+                                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                                Icon(Icons.north_east_rounded, color: TabletColors.dim, size: 18),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      const Icon(Icons.lock_outline_rounded, size: 16, color: TabletColors.faint),
+                      const SizedBox(width: 10),
+                      const Expanded(
+                        child: Text(
+                          'ShelfSync only sees the files it creates.',
+                          style: TextStyle(fontSize: 14, color: TabletColors.faint),
+                        ),
+                      ),
+                      if (signedIn)
+                        TextButton(
+                          style: TextButton.styleFrom(
+                            foregroundColor: TabletColors.danger,
+                            minimumSize: const Size(0, 48),
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700, fontFamily: uiFamily),
+                          ),
+                          onPressed: () {
+                            Navigator.pop(context);
+                            sync.signOut();
+                          },
+                          child: const Text('Sign out'),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// The big box: green when synced, red when something failed.
+  Widget _statusCard() {
+    final status = _panelStatus(sync, librarySync);
+    final connected = sync.status == SyncStatus.connected;
+    final ok = !status.problem && !status.busy && connected;
+    final base = status.problem ? const Color(0xFFF87171) : (ok ? TabletColors.green : const Color(0xFF93C5FD));
+    final title = ok ? 'Everything is synced' : status.title;
+    final syncedAt = librarySync.lastSyncedAt;
+    final detail = ok
+        ? 'Books, pages, shelves and bookmarks · checked ${syncedAt == null ? 'just now' : timeAgo(syncedAt)}'
+        : status.detail;
+    final (String, VoidCallback?)? action = switch (sync.status) {
+      SyncStatus.connected when librarySync.isSyncing => null,
+      SyncStatus.connected => (status.problem ? 'Try again' : 'Sync now', librarySync.syncNow),
+      SyncStatus.error => ('Try again', sync.signIn),
+      SyncStatus.signedOut => ('Sign in', sync.signIn),
+      _ => null,
+    };
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [base.withValues(alpha: 0.2), base.withValues(alpha: 0.04)],
+        ),
+        border: Border.all(color: base.withValues(alpha: 0.3)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: base,
+              shape: BoxShape.circle,
+              boxShadow: [BoxShadow(color: base.withValues(alpha: 0.15), spreadRadius: 8)],
+            ),
+            child: status.busy
+                ? const Padding(
+                    padding: EdgeInsets.all(15),
+                    child: CircularProgressIndicator(strokeWidth: 3, color: Color(0xFF0B1B33)),
+                  )
+                : Icon(
+                    ok ? Icons.check_rounded : status.icon,
+                    size: 28,
+                    color: status.problem ? const Color(0xFF3B0A0A) : const Color(0xFF052E1F),
+                  ),
+          ),
+          const SizedBox(width: 18),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700)),
+                if (detail != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    detail,
+                    maxLines: 3,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(fontSize: 15, color: Color.lerp(base, Colors.white, 0.55)),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (action != null) ...[
+            const SizedBox(width: 12),
+            GlassPillButton(
+              label: action.$1,
+              icon: action.$1 == 'Sign in' ? Icons.login_rounded : Icons.sync_rounded,
+              height: 48,
+              fontSize: 15,
+              onPressed: action.$2,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _Stat extends StatelessWidget {
+  const _Stat({required this.value, required this.label});
+
+  final String value;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
+        decoration: BoxDecoration(color: const Color(0x0DFFFFFF), borderRadius: BorderRadius.circular(18)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(value, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700)),
+            const SizedBox(height: 4),
+            Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 14, color: TabletColors.dim),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TabletDevice extends StatelessWidget {
+  const _TabletDevice({required this.icon, required this.name, required this.note, this.here = false});
+
+  final IconData icon;
+  final String name;
+  final String note;
+  final bool here;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 4),
+      child: Row(
+        children: [
+          Container(
+            width: 48,
+            height: 48,
+            decoration: BoxDecoration(color: const Color(0x0FFFFFFF), borderRadius: BorderRadius.circular(14)),
+            child: Icon(icon, color: TabletColors.muted),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(name, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
+                const SizedBox(height: 3),
+                Text(
+                  note,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 14, color: TabletColors.dim),
+                ),
+              ],
+            ),
+          ),
+          if (here)
+            Container(
+              height: 26,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(color: const Color(0x295EEAD4), borderRadius: BorderRadius.circular(13)),
+              child: const Text(
+                'THIS ONE',
+                style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: TabletColors.accent),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }

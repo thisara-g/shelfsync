@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The tablet design's background, so the app opens dark with no white flash. -->
+    <color name="shelfsync_background">#FF0C1012</color>
+</resources>

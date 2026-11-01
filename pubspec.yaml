@@ -75,6 +75,7 @@ flutter:
   assets:
     - config/
     - assets/icons/shelfsync.png
+    - assets/icons/google_g.png
     - assets/fonts/Figtree-OFL.txt
     - assets/fonts/Literata-OFL.txt
 

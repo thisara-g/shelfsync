@@ -3,16 +3,20 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:pdfrx/pdfrx.dart';
 
 import '../models/book.dart';
+import '../services/cover_renderer.dart';
 import '../services/library_store.dart';
 import '../services/page_image_regions.dart';
 import '../sync/library_sync.dart';
 import '../sync/progress_record.dart';
 import 'common.dart';
 import 'reader_parts.dart';
+import 'reader_tablet.dart';
+import 'tablet_ui.dart';
 
 /// Native window controls (Linux runner): full screen.
 const _windowChannel = MethodChannel('shelfsync/window');
@@ -49,11 +53,20 @@ abstract final class _Chrome {
 }
 
 class ReaderScreen extends StatefulWidget {
-  const ReaderScreen({super.key, required this.store, required this.librarySync, required this.book});
+  const ReaderScreen({
+    super.key,
+    required this.store,
+    required this.librarySync,
+    required this.book,
+    this.openContents = false,
+  });
 
   final LibraryStore store;
   final LibrarySync librarySync;
   final Book book;
+
+  /// Tablet: open the contents drawer as soon as the book has loaded.
+  final bool openContents;
 
   @override
   State<ReaderScreen> createState() => _ReaderScreenState();
@@ -86,6 +99,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// Touch layout: whether the top bar and bottom panel are showing.
   bool _chrome = true;
 
+  /// [ReaderScreen.openContents] has been acted on.
+  bool _contentsOpened = false;
+  late final _cover = CoverRenderer(widget.store).coverFor(widget.book);
+
+  /// Local reading time before a resume prompt, for its "This tablet" side.
+  late final DateTime? _localReadAt = widget.book.progressDevice == null ? widget.book.progressUpdatedAt : null;
+
   /// Desktop layout: whether the contents / pages / bookmarks panel is open.
   bool _panel = false;
   int _panelTab = 0;
@@ -104,6 +124,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// without pointer activity on them or at the window edges.
   bool _bars = true;
   Timer? _barsTimer;
+
+  /// Waits for a text selection to settle before copying it.
+  Timer? _copyTimer;
+
+  /// "Copied" in the top-left of the page area, briefly after a copy.
+  var _copied = false;
+  Timer? _copiedTimer;
+
+  /// Height of the floating toolbar (plus search strip), for placing the
+  /// "Copied" popup just below it.
+  var _topBarsHeight = 0.0;
 
   /// The bars stay longer the first time, while the reader is new.
   bool _barsHiddenOnce = false;
@@ -176,6 +207,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _hideTimer?.cancel();
     _resizeTimer?.cancel();
     _barsTimer?.cancel();
+    _copyTimer?.cancel();
+    _copiedTimer?.cancel();
     _controller.removeListener(_onViewChanged);
     _sync.removeListener(_onSyncChanged);
     _store.removeListener(_onStoreChanged);
@@ -195,6 +228,42 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   void _onStoreChanged() {
     if (mounted) setState(() {}); // bookmarks synced from elsewhere
+  }
+
+  /// Selecting text copies it once the selection stops changing, so there
+  /// is no need to press Ctrl+C (like the primary selection on Linux).
+  void _onTextSelectionChange(PdfTextSelection selection) {
+    _copyTimer?.cancel();
+    // The tablet keeps pdfrx's own Copy menu.
+    if (!_desktop || !selection.hasSelectedText || !selection.isCopyAllowed) return;
+    _copyTimer = Timer(const Duration(milliseconds: 300), _copySelection);
+  }
+
+  /// Copies the selected text and keeps it selected (pdfrx's own
+  /// copyTextSelection clears it). Returns whether anything was copied.
+  Future<bool> _copySelection() async {
+    final selection = _controller.textSelectionDelegate;
+    if (!selection.hasSelectedText || !selection.isCopyAllowed) return false;
+    final text = await selection.getSelectedText();
+    if (text.isEmpty) return false;
+    await Clipboard.setData(ClipboardData(text: text));
+    if (mounted && _desktop) {
+      setState(() => _copied = true);
+      _copiedTimer?.cancel();
+      _copiedTimer = Timer(const Duration(milliseconds: 1500), () {
+        if (mounted) setState(() => _copied = false);
+      });
+    }
+    return true;
+  }
+
+  Future<void> _copyWithKeys() async {
+    final selection = _controller.textSelectionDelegate;
+    if (selection.hasSelectedText && !selection.isCopyAllowed) {
+      _snack("This PDF doesn't allow copying its text");
+      return;
+    }
+    await _copySelection();
   }
 
   void _snack(String message) {
@@ -315,12 +384,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
         _outline = outline;
         if (outline.isEmpty && _panelTab == 0) _panelTab = 1;
       });
+      if (widget.openContents && !_contentsOpened && !_desktop) {
+        _contentsOpened = true;
+        _showContentsSheet();
+      }
     });
     final restore = _layout == ReaderLayout.scroll ? _restoreExactPosition() : _frame(page);
     _settle(restore, limit: const Duration(milliseconds: 700)).whenComplete(() {
       if (!mounted) return;
       _controller.addListener(_onViewChanged);
       _viewerReady = true;
+      // The first 5s before the bars hide count from when the book is showing.
+      if (!_desktop && _chrome) _scheduleHide();
       _onSyncChanged();
     });
   }
@@ -563,6 +638,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   void _closeSearch() {
     _searcher?.resetTextSearch();
     setState(() => _searching = false);
+    if (!_desktop) _scheduleHide();
     _scheduleBarsHide();
     _focusNode.requestFocus();
   }
@@ -697,15 +773,29 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   // --- Touch chrome -----------------------------------------------------------
 
+  /// Touch layout: the bars have hidden at least once since the book opened.
+  bool _chromeHiddenOnce = false;
+
+  /// 5s the first time, while the reader is new; 3s after that.
+  Duration get _chromeDelay => _chromeHiddenOnce ? const Duration(seconds: 3) : const Duration(seconds: 5);
+
+  /// Touch layout: hides the bars after [_chromeDelay]. While search, the
+  /// resume prompt or a slider drag needs them, it checks again later instead
+  /// of giving up, so they always go away in the end.
   void _scheduleHide() {
     _hideTimer?.cancel();
-    _hideTimer = Timer(const Duration(seconds: 5), () {
-      if (mounted && !_desktop && _offeredJump == null && !_searching) _setChrome(false);
+    _hideTimer = Timer(_chromeDelay, () {
+      if (!mounted || _desktop) return;
+      if (_offeredJump != null || _searching || _sliderPage != null) return _scheduleHide();
+      _chromeHiddenOnce = true;
+      _setChrome(false);
     });
   }
 
+  /// Shows or hides the touch bars; shown, they hide again after [_chromeDelay].
   void _setChrome(bool visible) {
     _hideTimer?.cancel();
+    if (visible) _scheduleHide();
     if (_chrome == visible) return;
     setState(() => _chrome = visible);
     if (Platform.isAndroid) {
@@ -713,71 +803,33 @@ class _ReaderScreenState extends State<ReaderScreen> {
     }
   }
 
+  /// Touching the bars restarts their countdown, so they don't go mid-tap.
+  Widget _keepBars(Widget bars) => Listener(onPointerDown: (_) => _scheduleHide(), child: bars);
+
   bool _onTap(BuildContext context, PdfViewerController controller, PdfViewerGeneralTapHandlerDetails details) {
     if (_desktop || details.type != PdfViewerGeneralTapType.tap || _searching) return false;
     _setChrome(!_chrome);
     return false;
   }
 
-  Future<void> _showContentsSheet() async {
+  Future<void> _showContentsSheet({int tab = 0}) async {
     final document = _document;
     if (document == null) return;
     _hideTimer?.cancel();
-    void go(BuildContext context, int page) {
-      Navigator.pop(context);
-      _goToPage(page);
-    }
-
-    await showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (context) => DraggableScrollableSheet(
-        expand: false,
-        initialChildSize: 0.7,
-        maxChildSize: 0.95,
-        builder: (context, scroll) => DefaultTabController(
-          length: 3,
-          initialIndex: _outline.isEmpty ? 1 : 0,
-          child: Column(
-            children: [
-              const TabBar(
-                tabs: [
-                  Tab(text: 'Contents'),
-                  Tab(text: 'Pages'),
-                  Tab(text: 'Bookmarks'),
-                ],
-              ),
-              Expanded(
-                child: TabBarView(
-                  children: [
-                    _outline.isEmpty
-                        ? const Center(child: Text('This PDF has no table of contents.'))
-                        : ContentsList(
-                            outline: _outline,
-                            page: _page ?? 1,
-                            controller: scroll,
-                            onSelect: (p) => go(context, p),
-                          ),
-                    PagesGrid(document: document, page: _page ?? 1, maxExtent: 150, onSelect: (p) => go(context, p)),
-                    ListenableBuilder(
-                      listenable: _store,
-                      builder: (context, _) => BookmarksList(
-                        pages: _store.bookmarksFor(_book.id),
-                        outline: _outline,
-                        page: _page ?? 1,
-                        onSelect: (p) => go(context, p),
-                        onRemove: (p) => _store.toggleBookmark(_book.id, p).then((_) => _sync.syncNow()),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+    await showTabletContents(
+      context,
+      book: _book,
+      cover: _cover,
+      outline: _outline,
+      page: _page ?? _book.lastPage,
+      pageCount: _pageCount ?? document.pages.length,
+      document: document,
+      store: _store,
+      initialTab: tab,
+      onGo: _goToPage,
+      onRemoveBookmark: (p) => _store.toggleBookmark(_book.id, p).then((_) => _sync.syncNow()),
     );
+    if (mounted) _scheduleHide();
   }
 
   // --- Page painting --------------------------------------------------------
@@ -866,6 +918,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         onViewerReady: _onViewerReady,
         onPageChanged: _onPageChanged,
         onGeneralTap: _onTap,
+        textSelectionParams: PdfTextSelectionParams(onTextSelectionChange: _onTextSelectionChange),
         // Keys are handled in _onKey, so ↑/↓ can continue onto the next page.
         keyHandlerParams: const PdfViewerKeyHandlerParams(enabled: false),
       ),
@@ -879,6 +932,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       record: record,
       currentPage: _page ?? _book.lastPage,
       section: _outline.sectionAt(record.page)?.title,
+      chapter: _outline.chapterAt(record.page)?.title,
     );
   }
 
@@ -887,6 +941,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     ('↑ ↓', 'Scroll; past the edge, previous / next page'),
     ('Home / End', 'First / last page'),
     ('Ctrl+F', 'Search in book'),
+    ('Select text', 'Copies it'),
+    ('Ctrl+C / Ctrl+A', 'Copy the selection / select all text'),
     ('Ctrl+D', 'Bookmark this page'),
     ('Ctrl+G', 'Go to page'),
     ('Ctrl+= / Ctrl+−', 'Zoom in / out'),
@@ -901,6 +957,20 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (event is! KeyDownEvent && event is! KeyRepeatEvent) return KeyEventResult.ignored;
     final key = event.logicalKey;
     final keyboard = HardwareKeyboard.instance;
+    final focused = FocusManager.instance.primaryFocus?.context;
+    final typing = focused != null && focused.findAncestorStateOfType<EditableTextState>() != null;
+    if (keyboard.isControlPressed && !typing) {
+      // pdfrx's own key handler is off (see keyHandlerParams), so copy and
+      // select all are handled here; in the search box they stay the box's.
+      if (key == LogicalKeyboardKey.keyC) {
+        _copyWithKeys();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.keyA) {
+        _controller.textSelectionDelegate.selectAllText();
+        return KeyEventResult.handled;
+      }
+    }
     if (keyboard.isControlPressed) {
       final VoidCallback? action = switch (key) {
         LogicalKeyboardKey.keyF => _openSearch,
@@ -928,6 +998,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (key == LogicalKeyboardKey.escape) {
       if (_searching) {
         _closeSearch();
+      } else if (_controller.textSelectionDelegate.hasSelectedText) {
+        _controller.textSelectionDelegate.clearTextSelection();
       } else if (_offeredJump != null) {
         _declineJump();
       } else if (_fullscreen) {
@@ -937,10 +1009,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       }
       return KeyEventResult.handled;
     }
-    final focused = FocusManager.instance.primaryFocus?.context;
-    if (focused != null && focused.findAncestorStateOfType<EditableTextState>() != null) {
-      return KeyEventResult.ignored; // typing in the search or page box
-    }
+    if (typing) return KeyEventResult.ignored; // typing in the search or page box
     final VoidCallback? action = switch (key) {
       LogicalKeyboardKey.arrowDown => () => _scrollStep(1),
       LogicalKeyboardKey.arrowUp => () => _scrollStep(-1),
@@ -1033,35 +1102,63 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final page = _page ?? _book.lastPage;
     final count = _pageCount;
     final chapter = _outline.chapterAt(page)?.title;
-    const barColor = Color(0xF2182024);
-    final topInset = MediaQuery.paddingOf(context).top;
+    final insets = MediaQuery.paddingOf(context);
     final bookmarked = _store.isBookmarked(_book.id, page);
+    final shown = (_sliderPage ?? page).round();
+    const duration = Duration(milliseconds: 220);
     return Scaffold(
       body: Stack(
         children: [
           Positioned.fill(child: _viewer()),
-          // Top bar (and the search strip under it).
-          AnimatedPositioned(
-            duration: const Duration(milliseconds: 200),
+          // A soft shade under the top bar so it reads on white pages.
+          Positioned(
             left: 0,
             right: 0,
-            top: _chrome ? 0 : -(topInset + 140),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Material(
-                  color: barColor,
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(4, topInset + 4, 8, 4),
+            top: 0,
+            height: insets.top + 150,
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                duration: duration,
+                opacity: _chrome ? 1 : 0,
+                child: const DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Color(0x590A0E10), Color(0x000A0E10)],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // Floating top bar (and the search strip under it).
+          AnimatedPositioned(
+            duration: duration,
+            curve: Curves.easeOutCubic,
+            left: 16,
+            right: 16,
+            top: _chrome ? insets.top + 12 : -(insets.top + 200),
+            child: _keepBars(
+              Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  ReaderGlass(
+                    radius: 26,
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
                     child: Row(
                       children: [
-                        IconButton(
+                        GlassIconButton(
+                          icon: Icons.chevron_left_rounded,
+                          iconSize: 28,
+                          size: 52,
+                          border: false,
+                          background: const Color(0x12FFFFFF),
                           tooltip: 'Back to library',
-                          color: _Chrome.text,
-                          icon: const Icon(Icons.arrow_back),
                           onPressed: () => Navigator.maybePop(context),
                         ),
+                        const SizedBox(width: 14),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1071,112 +1168,192 @@ class _ReaderScreenState extends State<ReaderScreen> {
                                 _book.title,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(color: _Chrome.text, fontSize: 18, fontWeight: FontWeight.w600),
+                                style: const TextStyle(
+                                  color: TabletColors.text,
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                               if (chapter != null)
                                 Text(
-                                  chapter,
+                                  chapterLine(chapter),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(color: _Chrome.muted, fontSize: 14),
+                                  style: const TextStyle(color: TabletColors.dim, fontSize: 14),
                                 ),
                             ],
                           ),
                         ),
-                        IconButton(
+                        const SizedBox(width: 6),
+                        GlassIconButton(
+                          icon: Icons.search_rounded,
+                          size: 52,
+                          border: false,
+                          background: _searching ? const Color(0x295EEAD4) : Colors.transparent,
+                          foreground: _searching ? TabletColors.accent : TabletColors.text,
                           tooltip: 'Search in book',
-                          color: _Chrome.text,
-                          icon: const Icon(Icons.search),
-                          onPressed: _openSearch,
+                          onPressed: _searching ? _closeSearch : _openSearch,
                         ),
-                        IconButton(
-                          tooltip: 'Contents, pages and bookmarks',
-                          color: _Chrome.text,
-                          icon: const Icon(Icons.format_list_bulleted),
-                          onPressed: _showContentsSheet,
-                        ),
-                        IconButton(
+                        const SizedBox(width: 6),
+                        GlassIconButton(
+                          icon: bookmarked ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+                          size: 52,
+                          border: false,
+                          background: bookmarked ? const Color(0x295EEAD4) : Colors.transparent,
+                          foreground: bookmarked ? TabletColors.accent : TabletColors.text,
                           tooltip: bookmarked ? 'Remove bookmark' : 'Bookmark this page',
-                          color: bookmarked ? _Chrome.accent : _Chrome.text,
-                          icon: Icon(bookmarked ? Icons.bookmark : Icons.bookmark_border),
                           onPressed: _toggleBookmark,
+                        ),
+                        const SizedBox(width: 6),
+                        GlassIconButton(
+                          icon: Icons.format_list_bulleted_rounded,
+                          size: 52,
+                          border: false,
+                          background: Colors.transparent,
+                          tooltip: 'Contents, pages and bookmarks',
+                          onPressed: _showContentsSheet,
                         ),
                       ],
                     ),
                   ),
-                ),
-                if (_searching) _searchStrip(background: const Color(0xF2202A2E)),
-              ],
+                  if (_searching) ...[
+                    const SizedBox(height: 8),
+                    ReaderGlass(radius: 20, child: _searchStrip(background: Colors.transparent)),
+                  ],
+                ],
+              ),
             ),
           ),
-          // Bottom panel.
+          // Floating bottom panel: slider, where you are, page colour.
           AnimatedPositioned(
-            duration: const Duration(milliseconds: 200),
-            left: 0,
-            right: 0,
-            bottom: _chrome ? 0 : -260,
-            child: Material(
-              color: const Color(0xF2182024),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-              child: SafeArea(
-                top: false,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(32, 20, 32, 28),
-                  child: count == null
-                      ? const SizedBox(height: 48)
-                      : Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            _PageSlider(
-                              page: _sliderPage ?? page.toDouble(),
-                              count: count,
-                              chapters: _outline.chapters.map((c) => c.page).toList(),
-                              onChanged: (v) {
-                                _hideTimer?.cancel();
-                                setState(() => _sliderPage = v);
-                              },
-                              onChangeEnd: (v) {
-                                setState(() => _sliderPage = null);
-                                _goToPage(v.round());
-                              },
-                            ),
-                            const SizedBox(height: 4),
-                            Row(
-                              children: [
-                                Text(
-                                  'Page ${(_sliderPage ?? page).round()} of $count',
-                                  style: const TextStyle(color: _Chrome.muted, fontSize: 15),
-                                ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                  child: Text(
-                                    _remainingText(page, count),
-                                    textAlign: TextAlign.end,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(color: _Chrome.muted, fontSize: 15),
+            duration: duration,
+            curve: Curves.easeOutCubic,
+            left: 16,
+            right: 16,
+            // Search needs the room (and the keyboard covers it anyway).
+            bottom: _chrome && !_searching ? insets.bottom + 24 : -340,
+            child: _keepBars(
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  const Positioned.fill(child: ReaderGlass(radius: 30, child: SizedBox.expand())),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 22, 24, 18),
+                    child: count == null
+                        ? const SizedBox(height: 48)
+                        : Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              TabletPageSlider(
+                                page: page,
+                                count: count,
+                                chapters: _outline.chapters.map((c) => c.page).toList(),
+                                document: _document,
+                                sectionAt: (p) => _outline.sectionAt(p)?.title,
+                                onChanged: (p) {
+                                  _hideTimer?.cancel();
+                                  setState(() => _sliderPage = p.toDouble());
+                                },
+                                onChangeEnd: (p) {
+                                  setState(() => _sliderPage = null);
+                                  _goToPage(p);
+                                  _scheduleHide();
+                                },
+                              ),
+                              const SizedBox(height: 14),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.baseline,
+                                textBaseline: TextBaseline.alphabetic,
+                                children: [
+                                  Text.rich(
+                                    TextSpan(
+                                      text: 'Page $shown',
+                                      children: [
+                                        TextSpan(
+                                          text: ' of $count',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.normal,
+                                            color: TabletColors.dim,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    style: const TextStyle(
+                                      color: TabletColors.text,
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.w600,
+                                    ),
                                   ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 22),
-                            Row(
-                              children: [
-                                const Text('Page colour', style: TextStyle(color: _Chrome.muted, fontSize: 15)),
-                                const Spacer(),
-                                PageColourPicker(value: _store.readerTheme, onChanged: _setTheme),
-                              ],
-                            ),
-                          ],
-                        ),
-                ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Text(
+                                      _leftText(shown, count),
+                                      textAlign: TextAlign.end,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(color: TabletColors.dim, fontSize: 14),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 18),
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  // Takes the width it needs; scrolls only on a narrow screen.
+                                  Flexible(
+                                    child: SingleChildScrollView(
+                                      scrollDirection: Axis.horizontal,
+                                      child: ReaderThemeSegment(value: _store.readerTheme, onChanged: _setTheme),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Material(
+                                    color: Colors.transparent,
+                                    shape: const StadiumBorder(side: BorderSide(color: Color(0x1FFFFFFF))),
+                                    child: InkWell(
+                                      customBorder: const StadiumBorder(),
+                                      onTap: () => _showContentsSheet(tab: 1),
+                                      child: const SizedBox(
+                                        height: 50,
+                                        child: Padding(
+                                          padding: EdgeInsets.symmetric(horizontal: 18),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(Icons.grid_view_outlined, size: 20, color: TabletColors.text),
+                                              SizedBox(width: 8),
+                                              Text(
+                                                'Pages',
+                                                style: TextStyle(
+                                                  color: TabletColors.text,
+                                                  fontSize: 15,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                  ),
+                ],
               ),
             ),
           ),
           if (offer != null)
             Positioned.fill(
-              child: ResumeSheet(
+              child: TabletResumeCard(
                 offer: offer,
                 document: _document,
+                localChapter: _outline.chapterAt(offer.currentPage)?.title,
+                localWhen: _localReadAt,
                 alwaysJump: _alwaysJump,
                 onAlwaysJump: (v) => setState(() => _alwaysJump = v),
                 onJump: _acceptJump,
@@ -1188,20 +1365,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
+  /// "13 pages left in this chapter", or in the book after the last chapter.
+  String _leftText(int page, int count) {
+    final next = _outline.nextChapterPage(page);
+    final left = (next ?? count + 1) - page - (next == null ? 1 : 0);
+    if (left <= 0) return next == null ? 'Last page' : 'Last page of this chapter';
+    return '$left page${left == 1 ? '' : 's'} left${next == null ? '' : ' in this chapter'}';
+  }
+
   String get _percentRead {
     final page = _page ?? _book.lastPage;
     final count = _pageCount ?? 1;
     return '${((page - 1) / (count > 1 ? count - 1 : 1) * 100).round()}%';
-  }
-
-  String _remainingText(int page, int count) {
-    final next = _outline.nextChapterPage(page);
-    if (next != null) {
-      final left = next - page;
-      return '$_percentRead · $left page${left == 1 ? '' : 's'} left in chapter';
-    }
-    final left = count - page;
-    return '$_percentRead · $left page${left == 1 ? '' : 's'} left';
   }
 
   // --- Desktop layout ---------------------------------------------------------
@@ -1442,6 +1617,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   },
                 ),
               ),
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 200),
+                left: 32,
+                top: (_bars ? _topBarsHeight : 0) + 32,
+                child: IgnorePointer(child: _CopiedToast(visible: _copied)),
+              ),
               if (offer != null)
                 AnimatedPositioned(
                   duration: const Duration(milliseconds: 200),
@@ -1521,13 +1702,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
               child: MouseRegion(
                 // Moving over the bars counts as activity.
                 onHover: (_) => _scheduleBarsHide(),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _passToPage(toolbar),
-                    if (_searching) _searchStrip(background: _Chrome.group),
-                  ],
+                child: _SizeReporter(
+                  onHeight: (height) {
+                    if (height != _topBarsHeight) setState(() => _topBarsHeight = height);
+                  },
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      _passToPage(toolbar),
+                      if (_searching) _searchStrip(background: _Chrome.group),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -1550,6 +1736,83 @@ class _ReaderScreenState extends State<ReaderScreen> {
 }
 
 // --- Desktop chrome pieces ---------------------------------------------------
+
+/// Small dark pill with a teal check: "Copied". Fades and drops in.
+class _CopiedToast extends StatelessWidget {
+  const _CopiedToast({required this.visible});
+
+  final bool visible;
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedOpacity(
+      opacity: visible ? 1 : 0,
+      duration: const Duration(milliseconds: 160),
+      child: AnimatedSlide(
+        offset: visible ? Offset.zero : const Offset(0, -0.25),
+        duration: const Duration(milliseconds: 160),
+        curve: Curves.easeOutCubic,
+        child: Semantics(
+          liveRegion: true,
+          child: Container(
+            height: 40,
+            padding: const EdgeInsets.only(left: 10, right: 16),
+            decoration: BoxDecoration(
+              color: const Color(0xF21D2321),
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: const [BoxShadow(color: Color(0x66000000), blurRadius: 22, offset: Offset(0, 8))],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 22,
+                  height: 22,
+                  decoration: const BoxDecoration(color: Color(0xFF00897B), shape: BoxShape.circle),
+                  child: const Icon(Icons.check_rounded, size: 15, color: Colors.white),
+                ),
+                const SizedBox(width: 9),
+                const Text(
+                  'Copied',
+                  style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Reports its child's laid-out height after each layout.
+class _SizeReporter extends SingleChildRenderObjectWidget {
+  const _SizeReporter({required this.onHeight, required super.child});
+
+  final ValueChanged<double> onHeight;
+
+  @override
+  RenderObject createRenderObject(BuildContext context) => _RenderSizeReporter(onHeight);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderSizeReporter renderObject) => renderObject.onHeight = onHeight;
+}
+
+class _RenderSizeReporter extends RenderProxyBox {
+  _RenderSizeReporter(this.onHeight);
+
+  ValueChanged<double> onHeight;
+  double? _reported;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    final height = size.height;
+    if (height == _reported) return;
+    _reported = height;
+    WidgetsBinding.instance.addPostFrameCallback((_) => onHeight(height));
+  }
+}
 
 class _ChromeIcon extends StatelessWidget {
   const _ChromeIcon({
@@ -1796,65 +2059,6 @@ class _FooterHint extends StatelessWidget {
           const SizedBox(width: 6),
           Text(text),
         ],
-      ),
-    );
-  }
-}
-
-/// Page slider with tick marks where chapters start.
-class _PageSlider extends StatelessWidget {
-  const _PageSlider({
-    required this.page,
-    required this.count,
-    required this.chapters,
-    required this.onChanged,
-    required this.onChangeEnd,
-  });
-
-  final double page;
-  final int count;
-  final List<int> chapters;
-  final ValueChanged<double> onChanged;
-  final ValueChanged<double> onChangeEnd;
-
-  @override
-  Widget build(BuildContext context) {
-    if (count < 2) return const SizedBox(height: 48);
-    return SizedBox(
-      height: 48,
-      child: LayoutBuilder(
-        builder: (context, constraints) {
-          // Matches the Slider's default horizontal track padding.
-          const inset = 24.0;
-          final track = constraints.maxWidth - inset * 2;
-          return Stack(
-            alignment: Alignment.center,
-            children: [
-              for (final c in chapters)
-                Positioned(
-                  left: inset + track * (c - 1) / (count - 1) - 1,
-                  top: 17,
-                  child: Container(width: 2, height: 14, color: _Chrome.faint),
-                ),
-              SliderTheme(
-                data: SliderTheme.of(context).copyWith(
-                  activeTrackColor: _Chrome.accent,
-                  inactiveTrackColor: _Chrome.selected,
-                  thumbColor: Colors.white,
-                  overlayColor: Colors.white24,
-                  trackHeight: 6,
-                ),
-                child: Slider(
-                  min: 1,
-                  max: count.toDouble(),
-                  value: page.clamp(1, count.toDouble()),
-                  onChanged: onChanged,
-                  onChangeEnd: onChangeEnd,
-                ),
-              ),
-            ],
-          );
-        },
       ),
     );
   }

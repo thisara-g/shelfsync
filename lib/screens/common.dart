@@ -66,10 +66,15 @@ ThemeData readerChromeTheme() {
   return ThemeData(colorScheme: scheme, fontFamily: uiFamily, scaffoldBackgroundColor: const Color(0xFF101416));
 }
 
+/// Tests: show the touch (tablet) layout on any platform and window size.
+@visibleForTesting
+bool debugTouchLayout = false;
+
 /// Desktop layout: sidebar, toolbar and keyboard-first controls. Used on
 /// desktop platforms unless the window is narrow, where the touch layout fits
 /// better.
 bool useDesktopLayout(BuildContext context) {
+  if (debugTouchLayout) return false;
   final desktop = Platform.isLinux || Platform.isWindows || Platform.isMacOS;
   return desktop && MediaQuery.sizeOf(context).width >= 760;
 }
@@ -92,6 +97,28 @@ String? lastReadLine(Book book) {
   final device = book.progressDevice;
   final where = device == null ? 'here' : 'on $device';
   return 'Last read $where, ${timeAgo(when)}';
+}
+
+/// "9 Functions" → "Chapter 9 · Functions" (or "9 · Functions" when
+/// [short]); other titles are kept as they are.
+String chapterLine(String title, {bool short = false}) {
+  final match = RegExp(r'^(\d+)[.:]?\s+(\D.*)$').firstMatch(title.trim());
+  if (match == null) return _unshout(title);
+  return '${short ? '' : 'Chapter '}${match.group(1)} · ${_unshout(match.group(2)!)}';
+}
+
+/// "FORMATTED INPUT/OUTPUT" → "Formatted Input/Output"; titles that aren't
+/// all capitals are kept.
+String _unshout(String title) {
+  if (title != title.toUpperCase() || title == title.toLowerCase()) return title;
+  const small = {'a', 'an', 'and', 'as', 'at', 'by', 'for', 'in', 'of', 'on', 'or', 'the', 'to', 'with'};
+  var first = true;
+  return title.toLowerCase().replaceAllMapped(RegExp(r"[a-z][a-z']*"), (m) {
+    final word = m[0]!;
+    final keep = !first && small.contains(word);
+    first = false;
+    return keep ? word : word[0].toUpperCase() + word.substring(1);
+  });
 }
 
 String formatSize(int bytes) {

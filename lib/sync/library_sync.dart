@@ -54,6 +54,18 @@ class LibrarySync extends ChangeNotifier {
 
   ProgressRecord? pendingJumpFor(String bookId) => _pendingJumps[bookId];
 
+  /// Books from Drive the running sync has found but not added yet.
+  int get incoming => _incoming;
+  int _incoming = 0;
+
+  /// Books from Drive added by the running (or last) sync.
+  int get arrivedThisSync => _arrivedThisSync;
+  int _arrivedThisSync = 0;
+
+  /// Books that arrived from Drive since the app started.
+  Set<String> get arrived => _arrived;
+  final Set<String> _arrived = {};
+
   /// The book currently open in the reader. Its position is never changed
   /// behind the reader's back (the reader would just overwrite it); a
   /// different page from another device always becomes a prompt.
@@ -100,6 +112,7 @@ class LibrarySync extends ChangeNotifier {
       return;
     }
     _running = true;
+    _arrivedThisSync = 0;
     notifyListeners();
     try {
       do {
@@ -112,6 +125,7 @@ class LibrarySync extends ChangeNotifier {
       _lastError = '$e';
     } finally {
       _running = false;
+      _incoming = 0;
       notifyListeners();
     }
   }
@@ -152,8 +166,13 @@ class LibrarySync extends ChangeNotifier {
       }
     }
 
+    _incoming = remote.values.where((r) => store.byId(r.bookId) == null).length;
+    if (_incoming > 0) notifyListeners();
     for (final r in remote.values) {
       if (store.byId(r.bookId) != null) continue;
+      _incoming--;
+      _arrivedThisSync++;
+      _arrived.add(r.bookId);
       await store.addRemote(
         id: r.bookId,
         title: r.title,

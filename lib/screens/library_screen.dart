@@ -1,5 +1,7 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'dart:math' show max, min, pi;
+import 'dart:ui' as ui;
 
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:file_picker/file_picker.dart';
@@ -12,10 +14,15 @@ import '../models/shelf.dart';
 import '../services/cover_renderer.dart';
 import '../services/library_store.dart';
 import '../sync/library_sync.dart';
+import '../sync/progress_record.dart';
 import '../sync/sync_controller.dart';
 import 'common.dart';
 import 'reader_screen.dart';
 import 'sync_button.dart';
+import 'tablet_ui.dart';
+
+part 'library_tablet.dart';
+part 'library_tablet_sheets.dart';
 
 enum LibraryFilter {
   all('All books', Icons.auto_stories_outlined),
@@ -110,6 +117,16 @@ class _LibraryScreenState extends State<LibraryScreen> {
   final _menuAnchor = GlobalKey();
   Book? _menuBook;
 
+  /// Tablet: the search field under the header is open.
+  var _searchOpen = false;
+
+  /// Tablet: picking several books (in [_picked]) to put on a shelf.
+  var _selecting = false;
+  var _shelfFilter = _ShelfFilter.all;
+
+  /// Tablet: a sheet or dialog is open over the library, which blurs.
+  var _blurLibrary = false;
+
   LibraryStore get store => widget.store;
   LibrarySync get librarySync => widget.librarySync;
 
@@ -129,6 +146,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
     _shelfNameFocus.dispose();
     super.dispose();
   }
+
+  /// setState for the tablet layout's extension.
+  void _update(VoidCallback fn) => setState(fn);
 
   void _snack(String message) {
     if (!mounted) return;
@@ -181,65 +201,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
     if (added > 0) librarySync.syncNow();
   }
 
-  Future<void> _showBookMenu(Book book, Offset position) async {
-    final inCloud = book.driveFileId != null;
-    final shelf = _shelf;
-    final action = await showMenu<String>(
-      context: context,
-      position: RelativeRect.fromLTRB(position.dx, position.dy, position.dx, position.dy),
-      items: [
-        PopupMenuItem(
-          value: 'open',
-          child: ListTile(
-            leading: Icon(book.isLocal ? Icons.menu_book_outlined : Icons.cloud_download_outlined),
-            title: Text(book.isLocal ? 'Open' : 'Download and open'),
-          ),
-        ),
-        const PopupMenuItem(
-          value: 'rename',
-          child: ListTile(leading: Icon(Icons.edit_outlined), title: Text('Rename')),
-        ),
-        const PopupMenuItem(
-          value: 'shelves',
-          child: ListTile(leading: Icon(Icons.shelves), title: Text('Shelves…')),
-        ),
-        if (shelf != null)
-          PopupMenuItem(
-            value: 'unshelve',
-            child: ListTile(leading: const Icon(Icons.remove_circle_outline), title: Text('Remove from ${shelf.name}')),
-          ),
-        if (inCloud && book.isLocal)
-          const PopupMenuItem(
-            value: 'remove-local',
-            child: ListTile(leading: Icon(Icons.file_download_off_outlined), title: Text('Remove download')),
-          ),
-        PopupMenuItem(
-          value: 'delete',
-          child: ListTile(
-            leading: const Icon(Icons.delete_outline),
-            title: Text(inCloud ? 'Delete everywhere' : 'Remove'),
-          ),
-        ),
-      ],
-    );
-    if (!mounted) return;
-    switch (action) {
-      case 'open':
-        await _open(book);
-      case 'rename':
-        await _rename(book);
-      case 'shelves':
-        await _chooseShelves(book);
-      case 'unshelve':
-        await _putOnShelf(shelf!, book, false);
-      case 'remove-local':
-        await store.removeLocalCopy(book.id);
-        _snack('Download removed. "${book.title}" stays in Google Drive.');
-      case 'delete':
-        await _confirmDelete(book);
-    }
-  }
-
   Future<String?> _askName({
     required String title,
     required String action,
@@ -276,11 +237,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
     return name == null || name.isEmpty || name == initial ? null : name;
   }
 
-  Future<void> _rename(Book book) async {
-    final title = await _askName(title: 'Rename book', action: 'Rename', initial: book.title, label: 'Title');
-    if (title != null) await librarySync.rename(book, title);
-  }
-
   Future<void> _confirmDelete(Book book) async {
     final inCloud = book.driveFileId != null;
     final confirmed = await showDialog<bool>(
@@ -306,7 +262,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
     }
   }
 
-  Future<void> _open(Book book) async {
+  /// Opens [book] in the reader; with [contents], at its contents panel.
+  Future<void> _open(Book book, {bool contents = false}) async {
     if (!book.isLocal) {
       try {
         await librarySync.download(book);
@@ -319,7 +276,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
     store.markOpened(book.id);
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => ReaderScreen(store: store, librarySync: librarySync, book: book),
+        builder: (_) => ReaderScreen(store: store, librarySync: librarySync, book: book, openContents: contents),
       ),
     );
   }
@@ -336,67 +293,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
   }
 
   // --- Shelves --------------------------------------------------------------
-
-  Future<Shelf?> _newShelf() async {
-    final name = await _askName(title: 'Create shelf', action: 'Create');
-    if (name == null) return null;
-    final shelf = await store.createShelf(name);
-    librarySync.syncNow();
-    return shelf;
-  }
-
-  Future<void> _putOnShelf(Shelf shelf, Book book, bool on) async {
-    await store.setOnShelf(shelf.id, book.id, on);
-    librarySync.syncNow();
-    _snack(on ? 'Added "${book.title}" to ${shelf.name}' : 'Removed "${book.title}" from ${shelf.name}');
-  }
-
-  Future<void> _chooseShelves(Book book) async {
-    await showDialog<void>(
-      context: context,
-      builder: (context) => ListenableBuilder(
-        listenable: store,
-        builder: (context, _) => AlertDialog(
-          title: Text('Shelves for "${book.title}"', maxLines: 2, overflow: TextOverflow.ellipsis),
-          content: SizedBox(
-            width: 400,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (store.shelves.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 8),
-                    child: Text('No shelves yet. Shelves group books, like "Textbooks" or "Novels".'),
-                  ),
-                for (final shelf in store.shelves)
-                  CheckboxListTile(
-                    value: shelf.bookIds.contains(book.id),
-                    onChanged: (on) {
-                      store.setOnShelf(shelf.id, book.id, on ?? false);
-                      librarySync.syncNow();
-                    },
-                    secondary: _ShelfDot(shelf),
-                    title: Text(shelf.name),
-                  ),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton.icon(
-                    onPressed: () async {
-                      final shelf = await _newShelf();
-                      if (shelf != null) await store.setOnShelf(shelf.id, book.id, true);
-                    },
-                    icon: const Icon(Icons.add),
-                    label: const Text('Create shelf'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actions: [TextButton(onPressed: () => Navigator.pop(context), child: const Text('Done'))],
-        ),
-      ),
-    );
-  }
 
   /// Opens the sidebar's inline "Create shelf" form; the new shelf gets
   /// [bookIds].
@@ -726,7 +622,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
       listenable: Listenable.merge([store, librarySync]),
       builder: (context, _) {
         if (_shelfId != null && _shelf == null) _shelfId = null; // deleted elsewhere
-        return desktop ? _desktop(context) : _touch(context);
+        return desktop ? _desktop(context) : _tablet(context);
       },
     );
     return CallbackShortcuts(
@@ -773,151 +669,6 @@ class _LibraryScreenState extends State<LibraryScreen> {
                 },
                 child: Stack(children: [body, if (_dragging) const _DropOverlay()]),
               ),
-      ),
-    );
-  }
-
-  // --- Tablet ---------------------------------------------------------------
-
-  Widget _touch(BuildContext context) {
-    final theme = Theme.of(context);
-    final books = _visibleBooks;
-    final current = _continueReading;
-    final localLabel = Platform.isAndroid ? 'On this tablet' : 'On this device';
-    final chips = <Widget>[
-      _Pill(label: 'All', selected: _shelfId == null && _filter == LibraryFilter.all, onTap: () => _select()),
-      _Pill(
-        label: localLabel,
-        selected: _shelfId == null && _filter == LibraryFilter.local,
-        onTap: () => _select(filter: LibraryFilter.local),
-      ),
-      _Pill(
-        label: 'Finished',
-        selected: _shelfId == null && _filter == LibraryFilter.finished,
-        onTap: () => _select(filter: LibraryFilter.finished),
-      ),
-      for (final shelf in store.shelves)
-        _Pill(
-          label: shelf.name,
-          dot: Color(shelfColors[shelf.color % shelfColors.length]),
-          selected: _shelfId == shelf.id,
-          onTap: () => _select(shelfId: shelf.id),
-          onMenu: (position) => _showShelfMenu(shelf, position),
-        ),
-      _Pill(
-        label: '+ Create shelf',
-        selected: false,
-        onTap: () async {
-          final shelf = await _newShelf();
-          if (shelf != null) _select(shelfId: shelf.id);
-        },
-      ),
-    ];
-    return Scaffold(
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: theme.colorScheme.inverseSurface,
-        foregroundColor: theme.colorScheme.onInverseSurface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        onPressed: _addBooks,
-        icon: const Icon(Icons.add),
-        label: const Text('Add PDF', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w600)),
-      ),
-      body: SafeArea(
-        bottom: false,
-        child: RefreshIndicator(
-          onRefresh: librarySync.syncNow,
-          notificationPredicate: (n) => n.depth == 0 && widget.sync.status == SyncStatus.connected,
-          child: CustomScrollView(
-            physics: const AlwaysScrollableScrollPhysics(),
-            slivers: [
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(32, 28, 32, 0),
-                sliver: SliverList.list(
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            'Library',
-                            style: theme.textTheme.displaySmall?.copyWith(
-                              fontFamily: serifFamily,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                        SyncButton(sync: widget.sync, librarySync: librarySync),
-                        const SizedBox(width: 12),
-                        AccountAvatar(sync: widget.sync, librarySync: librarySync),
-                      ],
-                    ),
-                    const SizedBox(height: 28),
-                    SearchBar(
-                      controller: _search,
-                      focusNode: _searchFocus,
-                      hintText: 'Search your books',
-                      elevation: const WidgetStatePropertyAll(0),
-                      constraints: const BoxConstraints(minHeight: 56),
-                      leading: const Padding(padding: EdgeInsets.only(left: 8), child: Icon(Icons.search)),
-                      trailing: [
-                        if (_search.text.isNotEmpty)
-                          IconButton(tooltip: 'Clear', icon: const Icon(Icons.close), onPressed: _search.clear),
-                      ],
-                    ),
-                    if (current.isNotEmpty) ...[
-                      const SizedBox(height: 32),
-                      const _SectionLabel('Continue reading', size: 15),
-                      const SizedBox(height: 14),
-                      _ContinueHero(
-                        book: current.first,
-                        cover: _covers.coverFor(current.first),
-                        transfer: librarySync.transferFor(current.first.id),
-                        onOpen: () => _open(current.first),
-                      ),
-                    ],
-                    const SizedBox(height: 32),
-                    Row(
-                      children: [
-                        _SectionLabel(
-                          _shelf?.name ?? (_filter == LibraryFilter.all ? 'All books' : _heading),
-                          size: 15,
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: SingleChildScrollView(
-                            scrollDirection: Axis.horizontal,
-                            reverse: true,
-                            child: Row(
-                              children: [
-                                for (final chip in chips)
-                                  Padding(padding: const EdgeInsets.only(left: 10), child: chip),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-                  ],
-                ),
-              ),
-              _grid(
-                books,
-                padding: const EdgeInsets.fromLTRB(32, 0, 32, 120),
-                maxExtent: 190,
-                aspect: 0.56,
-                spacing: (28, 22),
-                tile: (book) => _TabletTile(
-                  book: book,
-                  cover: _covers.coverFor(book),
-                  transfer: librarySync.transferFor(book.id),
-                  onTap: () => _open(book),
-                  onMenu: (position) => _showBookMenu(book, position),
-                ),
-                emptyHint: 'Tap "Add PDF" to import a book.',
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }
@@ -1237,10 +988,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
 // --- Small pieces -----------------------------------------------------------
 
 class _SectionLabel extends StatelessWidget {
-  const _SectionLabel(this.text, {this.size = 13});
+  const _SectionLabel(this.text);
 
   final String text;
-  final double size;
 
   @override
   Widget build(BuildContext context) {
@@ -1248,7 +998,7 @@ class _SectionLabel extends StatelessWidget {
     return Text(
       text.toUpperCase(),
       style: TextStyle(
-        fontSize: size,
+        fontSize: 13,
         letterSpacing: 1,
         fontWeight: FontWeight.w600,
         color: theme.colorScheme.onSurfaceVariant,
@@ -1298,60 +1048,6 @@ class _ColorDot extends StatelessWidget {
     height: size,
     decoration: BoxDecoration(color: Color(argb), borderRadius: BorderRadius.circular(size / 4 + 0.5)),
   );
-}
-
-/// Tablet filter pill: filled dark when selected, outlined otherwise.
-class _Pill extends StatelessWidget {
-  const _Pill({required this.label, required this.selected, required this.onTap, this.dot, this.onMenu});
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-  final Color? dot;
-  final ValueChanged<Offset>? onMenu;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return GestureDetector(
-      onLongPressStart: onMenu == null ? null : (d) => onMenu!(d.globalPosition),
-      onSecondaryTapUp: onMenu == null ? null : (d) => onMenu!(d.globalPosition),
-      child: Material(
-        color: selected ? scheme.inverseSurface : Colors.transparent,
-        shape: StadiumBorder(side: selected ? BorderSide.none : BorderSide(color: scheme.outlineVariant)),
-        child: InkWell(
-          customBorder: const StadiumBorder(),
-          onTap: onTap,
-          child: Container(
-            height: 40,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            alignment: Alignment.center,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (dot != null) ...[
-                  Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(color: dot, borderRadius: BorderRadius.circular(3)),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                Text(
-                  label,
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-                    color: selected ? scheme.onInverseSurface : scheme.onSurface,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 class _EmptyState extends StatelessWidget {
@@ -1665,57 +1361,6 @@ class _TransferOverlay extends StatelessWidget {
             strokeWidth: 4,
             color: Colors.white,
             backgroundColor: Colors.white24,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Tablet grid tile: cover, progress bar and a one-line status.
-class _TabletTile extends StatelessWidget {
-  const _TabletTile({
-    required this.book,
-    required this.cover,
-    required this.transfer,
-    required this.onTap,
-    required this.onMenu,
-  });
-
-  final Book book;
-  final Future<File?> cover;
-  final Transfer? transfer;
-  final VoidCallback onTap;
-  final ValueChanged<Offset> onMenu;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final t = transfer;
-    return Semantics(
-      label: book.title,
-      child: GestureDetector(
-        onLongPressStart: (d) => onMenu(d.globalPosition),
-        onSecondaryTapUp: (d) => onMenu(d.globalPosition),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(8),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Expanded(
-                child: BookCoverFrame(book: book, cover: cover, overlay: t == null ? null : _TransferOverlay(t)),
-              ),
-              const SizedBox(height: 10),
-              ProgressLine(value: book.progress),
-              const SizedBox(height: 8),
-              Text(
-                _tabletStatus(book, t),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: theme.textTheme.bodyMedium?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-              ),
-            ],
           ),
         ),
       ),
@@ -2725,102 +2370,6 @@ String _pageLine(Book book) {
 }
 
 /// The big "Continue reading" card on the tablet library.
-class _ContinueHero extends StatelessWidget {
-  const _ContinueHero({required this.book, required this.cover, required this.transfer, required this.onOpen});
-
-  final Book book;
-  final Future<File?> cover;
-  final Transfer? transfer;
-  final VoidCallback onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final muted = theme.colorScheme.onSurfaceVariant;
-    final t = transfer;
-    final last = lastReadLine(book);
-    return Card(
-      elevation: 2,
-      shadowColor: Colors.black26,
-      color: theme.colorScheme.surfaceContainerLowest,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      clipBehavior: Clip.antiAlias,
-      margin: EdgeInsets.zero,
-      child: InkWell(
-        onTap: onOpen,
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              SizedBox(
-                width: 150,
-                height: 212,
-                child: BookCoverFrame(book: book, cover: cover, overlay: t == null ? null : _TransferOverlay(t)),
-              ),
-              const SizedBox(width: 28),
-              Expanded(
-                child: SizedBox(
-                  height: 212,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        book.title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontFamily: serifFamily,
-                          fontSize: 26,
-                          fontWeight: FontWeight.w600,
-                          height: 1.2,
-                        ),
-                      ),
-                      if (book.chapter != null) ...[
-                        const SizedBox(height: 10),
-                        Text(
-                          book.chapter!,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(fontSize: 16, color: muted),
-                        ),
-                      ],
-                      const SizedBox(height: 18),
-                      ProgressLine(value: book.progress, height: 8),
-                      const SizedBox(height: 8),
-                      Text(
-                        last == null
-                            ? _pageLine(book)
-                            : '${_pageLine(book)} · ${last[0].toLowerCase()}${last.substring(1)}',
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(fontSize: 15, color: muted),
-                      ),
-                      const Spacer(),
-                      SizedBox(
-                        height: 52,
-                        child: FilledButton.icon(
-                          style: FilledButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(horizontal: 28),
-                            textStyle: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-                          ),
-                          onPressed: onOpen,
-                          icon: Icon(book.isLocal ? Icons.play_arrow_rounded : Icons.cloud_download_outlined),
-                          label: Text(book.isLocal ? 'Continue' : 'Download and continue'),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// Compact "Continue reading" card on the desktop library.
 class _ContinueCard extends StatelessWidget {
   const _ContinueCard({required this.book, required this.cover, required this.onOpen});
